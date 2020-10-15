@@ -176,7 +176,6 @@ get_zone_influence <- function(data, standardized = FALSE, start_or_end = 'start
   } else{
     myPlay <- data 
   }
-  
   if(start_or_end %in% 'start'){
     # Want to filter down to the start of a pass
     pass_cond <- c('pass_forward', 'pass_shovel')
@@ -224,7 +223,7 @@ get_zone_influence <- function(data, standardized = FALSE, start_or_end = 'start
   # Dont need qb location, need ball location instead
   ball_loc <- 
     throw_time_positions %>%
-    filter(team %in% "ball") %>%
+    filter(team %in% "football") %>%
     select(x, y)
   
   qb_loc <- 
@@ -271,17 +270,12 @@ get_zone_influence <- function(data, standardized = FALSE, start_or_end = 'start
     throw_time_positions %>% 
     mutate(cov_struc = map2(R, S_i_t, ~ .x %*% .y %*% .y %*% solve(.x)))
   
-  avg_position <- myPlay %>%
-    filter(team %in% c("away", "home")) %>%
-    mutate(is_poss_team = ifelse(poss_team == team, 1, 0)) %>%
-    group_by(is_poss_team) %>%
-    summarize(avg_pos = mean(x, na.rm = TRUE)) %>%
-    arrange(avg_pos) %>%
-    summarize(play_direction = ifelse(first(is_poss_team) == 1, 'right', 'left')) %>%
+  play_dir <- myPlay %>%
+    slice(1) %>%
     pull(play_direction)
   
   # Restrict field for efficiency
-  if(avg_position %in% 'left'){
+  if(play_dir %in% 'left'){
     # QB is furthest right that we care about
     x_bounds <-
       throw_time_positions %>% 
@@ -1148,7 +1142,7 @@ add_influence <- function(pass_play){
     pull(frame_id) # Just need one frame for an arrival event
   
   ball_at_arrival <- pass_play %>%
-    filter(frame_id == pass_arrival_frame, team %in% 'ball') %>%
+    filter(frame_id == pass_arrival_frame, team %in% "football") %>%
     ungroup() %>%
     slice(1) %>%
     mutate(x = if_else(x < 0, 0, x),
@@ -1214,7 +1208,7 @@ ball_speed_at_arrival <- function(pass_play){
     pull(frame_id) # Just need one frame for an arrival event
   
   ball_at_arrival <- pass_play %>%
-    filter(frame_id == pass_arrival_frame, team %in% 'ball') %>%
+    filter(frame_id == pass_arrival_frame, team %in% "football") %>%
     ungroup() %>%
     slice(1) %>%
     pull(velocity)
@@ -1258,7 +1252,7 @@ air_yards <- function(pass_play){
     pull(frame_id)
   
   ball_position <- pass_play %>%
-    filter(team %in% 'ball', frame_id %in% c(throw_frame, arrival_frame)) %>%
+    filter(team %in% "football", frame_id %in% c(throw_frame, arrival_frame)) %>%
     summarize(dist = abs(first(x) - last(x))) %>%
     pull(dist)
   
@@ -1304,7 +1298,7 @@ intended_receiver <- function(pass_play){
   
   # Grab ball location, may need to investigate data integrity on this one
   ball_loc <- pass_play %>%
-    filter(team %in% "ball", frame_id == arrival_frame) %>%
+    filter(team %in% "football", frame_id == arrival_frame) %>%
     select(x, y)
   
   if(length(ball_loc$x) == 0){
@@ -1359,7 +1353,7 @@ ball_fix <- function(pass_play){
   
   # Ball stuff
   ball <- pass_play %>%
-    filter(team %in% 'ball') %>%
+    filter(team %in% "football") %>%
     mutate(delta_x = x - lag(x, default = 9999))
   
   # No Ball stuff
@@ -1413,7 +1407,7 @@ ball_fix <- function(pass_play){
       
       # only do it if the difference is big enough
       pass_play <- pass_play %>%
-        mutate(frame_id = case_when(team %in% 'ball' ~ frame_id - difference,
+        mutate(frame_id = case_when(team %in% "football" ~ frame_id - difference,
                                     TRUE ~ frame_id)) %>%
         dplyr::filter(frame_id >= 1)
     }
@@ -1459,7 +1453,7 @@ ball_fix_2 <- function(pass_play){
       slice(1)
     
     pass_play <- pass_play %>%
-      mutate(frame_id = if_else(team %in% 'ball', frame_id - difference, frame_id)) %>%
+      mutate(frame_id = if_else(team %in% "football", frame_id - difference, frame_id)) %>%
       filter(frame_id >0)
   }
   return(pass_play)
@@ -1476,7 +1470,7 @@ quick_nest_fix <- function(data, game_id, play_id){
 
 # Some of the observations have no ball data, remove these
 handle_no_ball <- function(data){
-  if(!any(data$team %in% 'ball')){
+  if(!any(data$team %in% "football")){
     return(NA_real_)
   } else{
     return(1)
