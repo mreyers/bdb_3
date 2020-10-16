@@ -466,10 +466,10 @@ get_grad_plot <- function(gradient_results, handoff_time_positions){
 }
 
 # GIF a collection of frames, be it a given play and influence or a gradient and influence
-make_gif <- function(example_play, handoff_frame, n_frames, inf_or_grad = 'inf'){
+make_gif <- function(example_play, inf_or_grad = 'inf'){
   
   handoff_time_positions <- example_play %>%
-    filter(frame_id == handoff_frame)
+    slice(1)
   
   xmin <- 0
   xmax <- 160/3
@@ -492,30 +492,31 @@ make_gif <- function(example_play, handoff_frame, n_frames, inf_or_grad = 'inf')
   
   # Make influence / grad data for each frame in the play
   influence_data <- example_play %>%
-    nest(-game_id, -play_id, -frame_id, -nfl_id_rusher) %>%
-    filter(frame_id >= handoff_frame, frame_id <= (handoff_frame + n_frames)) %>%
-    mutate(inf = map2(data, nfl_id_rusher, ~get_zone_influence(.x, .y)),
+    mutate(frame_id_2 = frame_id) %>%
+    nest(-game_id, -play_id, -frame_id_2) %>%
+    #filter(frame_id >= handoff_frame, frame_id <= (handoff_frame + n_frames)) %>%
+    mutate(inf = map(data, ~get_zone_influence(., lazy = TRUE)),
            grad = map2(inf, data, ~ calc_gradient(.x, .y)))
-  
+  print(influence_data)
   if(inf_or_grad %in% 'inf'){
     
     influence_data <- influence_data %>%
-      select(game_id, play_id, frame_id, inf) %>%
-      unnest() %>%
+      select(game_id, play_id, frame_id_2, inf) %>%
+      unnest(cols = c(inf)) %>%
       filter(home_inf != 0.5, away_inf != 0.5)
   } else{
     
     influence_data <- influence_data %>%
-      select(game_id, play_id, frame_id, grad) %>% 
+      select(game_id, play_id, frame_id_2, grad) %>% 
       unnest() %>%
       filter(grad_f != 0.25) %>%
       mutate( home_inf = grad_f, away_inf = grad_f)
   }
   
   influence_data <- influence_data %>%
-    unnest() %>%
     mutate(inf = case_when(poss_team %in% 'home' ~ home_inf,
-                           TRUE ~ away_inf)) 
+                           TRUE ~ away_inf)) %>%
+    rename(frame_id = frame_id_2)
   
   # Dont currently have poss_team in my example_play, need to resolve to get this to work
   handoff_time_positions <- handoff_time_positions %>%
@@ -535,7 +536,6 @@ make_gif <- function(example_play, handoff_frame, n_frames, inf_or_grad = 'inf')
   # Plotting the zone influence
   inf_plot <- 
     influence_data %>% 
-    filter(frame_id <= handoff_frame + n_frames) %>%
     # Some have fractional values for some reason
     mutate(s_1 = round(s_1), s_2 = round(s_2)) %>% 
     ggplot(aes(x = s_1, y = s_2)) +
@@ -574,19 +574,23 @@ make_gif <- function(example_play, handoff_frame, n_frames, inf_or_grad = 'inf')
              yend = c(xmin, xmax, xmax, xmin), 
              xend = c(ymax, ymax, ymin, ymin), colour = "black") + 
     ylim(xmin, xmax) +
-    geom_point(data = example_play %>% filter(frame_id <= handoff_frame + n_frames,
-                                              frame_id >= handoff_frame),
+    #geom_point(data = example_play %>% filter(frame_id <= handoff_frame + n_frames,
+    #                                          frame_id >= handoff_frame),
+    #           aes(x=x,y=y,color=team2), size =8) +
+    geom_point(data = example_play,
                aes(x=x,y=y,color=team2), size =8) +
     scale_color_manual(values = c("Def" = "lightblue", "Off" = "red", "ball" = "brown")) +
-    geom_text(data = example_play %>% filter(frame_id <= handoff_frame + n_frames,
-                                             frame_id >= handoff_frame),
-              aes(x=x,y=y,group=nfl_id,label=jersey_number),color='black')+
+    #geom_text(data = example_play %>% filter(frame_id <= handoff_frame + n_frames,
+    #                                         frame_id >= handoff_frame),
+    #          aes(x=x,y=y,group=nfl_id,label=jersey_number),color='black') +
+    geom_text(data = example_play,
+              aes(x=x,y=y,group=nfl_id,label=jersey_number),color='black') +
     theme_nothing() +
     transition_time(frame_id)  +
     ease_aes('linear') +
     NULL
 
-  play_length_ex <- n_frames + 1
+  play_length_ex <- length(unique(example_play$frame_id)) 
   animate(inf_plot, fps = 10, nframe = play_length_ex)
 }
 
@@ -611,13 +615,13 @@ standardize_play <- function(pass_play, reorient = FALSE){
     filter(team != "ball") %>%
     filter(mean_team == max(mean_team)) %>%
     dplyr::select(game_id, play_id, direction_left = team, -mean_team)
-  
+
   possession <- plays %>%
     dplyr::select(game_id, play_id, possession_team) %>%
     left_join(games, by = "game_id") %>%
     mutate(possession_t = if_else(possession_team == home_team_abbr, "home", "away")) %>%
     dplyr::select(game_id, play_id, possession_t)
-  
+
   data <- data %>%
     left_join(play_direction, by=c("game_id", "play_id")) %>%
     left_join(line_of_scrimmage, by = c("game_id", "play_id")) %>%

@@ -25,6 +25,14 @@ week_1_snaked <- week_1 %>%
 
 View(week_1 %>% slice(1:100))
 
+# Load the additional data files as well, assuming same structure as previously
+games <- read_csv("Data/games.csv", col_types = cols()) %>%
+  janitor::clean_names(case = "snake")
+players <- read_csv("Data/players.csv", col_types = cols()) %>%
+  janitor::clean_names(case = "snake") 
+plays <- read_csv("Data/plays.csv", col_types = cols()) %>%
+  janitor::clean_names(case = "snake")
+
 # Lets see if I can just blindly gif the first play
 source("src/utils/tracking_helpers.R")
 
@@ -49,9 +57,10 @@ sample_play_inf_prep <- sample_play %>%
 
 # Basic piece works, lets nest(game_id, frame_id) and try to get influence all places
 sample_play_nest <- sample_play_inf_prep %>%
-  mutate(frame_id_2 = frame_id) %>%
-  nest(-c(game_id, play_id, frame_id_2)) %>%
-  mutate(basic_inf = map(data, ~get_zone_influence(., lazy = TRUE)))
+  nest(-c(game_id, play_id)) %>%
+  mutate(data = pmap(list(data, game_id, play_id), ~quick_nest_fix(..1, ..2, ..3)),
+         standard_data = map(data, ~ standardize_play(., reorient = FALSE)),
+         basic_inf = map(standard_data, ~get_zone_influence(., lazy = TRUE)))
 
 # I should be able to slice one of these and get the inf plot
 holder <- sample_play_nest %>%
@@ -60,3 +69,11 @@ frame_pos <- holder %>% select(data) %>% unnest(data)
 inf_data <- holder %>% select(basic_inf) %>% unnest(basic_inf)
 
 get_inf_plot(inf_data, frame_pos)
+
+# Now to fix it so I can gif everything
+# Something is currently very wrong
+sample_play_nest %>%
+  select(standard_data) %>%
+  magrittr::extract2(1) %>%
+  map(make_gif)
+#anim_save("inf_beginning.gif")
