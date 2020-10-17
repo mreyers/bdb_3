@@ -77,3 +77,30 @@ sample_play_nest %>%
   magrittr::extract2(1) %>%
   map(make_gif)
 #anim_save("inf_beginning.gif")
+
+# Meyappan reminded me we need offensive formations, all available in plays
+plays %>%
+  select(play_type) %>%
+  table()
+
+# Now that I have old stuff functional, lets actually play around with the point of this contest
+# This means looking at defence and how it interacts with the game
+# We know offensive formation and personnel on each play
+# We also know what routes the pass catchers are running
+# It is easy enough to grab defensive players & position
+# We dont really have formations or coverage types on any given play,
+  # unless those are hidden within nflfastR
+# Dani thinks he will be able to get defensive alignments through some old model runs
+
+# One question I think is particularly interesting is that of the RPO
+# How do defences appropriately react to this new age approach?
+# We dont have line players and only have the pass versions of the RPOs
+# This means we could dig a little into plays where the QB runs an RPO
+  # and try to identify changes in defender behaviour
+# Realistically this should only impact the Linebackers and Safeties
+# Although I guess it would also impact the Corners in a zone defence scheme
+
+# It seems that RPO isnt available in nflfastR or in this data set
+# I could create a function to check for RPO though idk the subjective cutoffs
+# Perhaps something like RB moves towards the QB for multiple frames after snap
+# Since we only have passing plays, most of these will be RPOs?
