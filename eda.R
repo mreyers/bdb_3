@@ -340,6 +340,7 @@ pa_and_mim_plays_standardized %>%
   geom_smooth(method = "loess") + 
   geom_vline(xintercept = 0) #+
   #theme(legend.position = "none")
+
 # Separation obviously decreases for targeted receivers after a certain point due to
 # defenders seeing the ball released
 # I should have filtered on pass released
@@ -347,3 +348,11 @@ pa_and_mim_plays_standardized %>%
 # Though I feel like I understand the relationship between separation and target
 # The real comparison I need is post snap openness of non-rpo plays with rpos
 # Specifically need a marker to estimate when the RPO would have happened
+
+# To better evaluate defence, I probably need framewise completion probability
+# Time to fix up my thesis work I think
+# Since the point isnt to evaluate QBs, I can use pass arrival components in
+# model building
+# This will require some modifications as the model currently doesnt have these
+# features.
+# Transition over to that work to build out
