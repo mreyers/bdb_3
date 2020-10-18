@@ -196,7 +196,7 @@ all_weeks_db <- tbl(con, "all_weeks")
   # Use collect() to execute query into R data type
 pa_and_mim_plays <- all_weeks_db %>%
   group_by(game_id, play_id) %>%
-  mutate(n_play_action = sum(event %in% "play_action", na.rm = TRUE),
+  mutate(n_play_action = sum(event %in% c("play_action", "run_pass_option"), na.rm = TRUE),
          n_man_in_motion = sum(event %in% "man_in_motion", na.rm = TRUE)) %>%
   ungroup() %>%
   filter(n_play_action > 0 | n_man_in_motion > 0) %>%
@@ -213,7 +213,7 @@ pa_and_mim_plays %>%
 # Standard plays i.e. no motion / play action
 standard_plays <- all_weeks_db %>%
   group_by(game_id, play_id) %>%
-  mutate(n_play_action = sum(event %in% "play_action", na.rm = TRUE),
+  mutate(n_play_action = sum(event %in% c("play_action", "run_pass_option"), na.rm = TRUE),
          n_man_in_motion = sum(event %in% "man_in_motion", na.rm = TRUE)) %>%
   ungroup() %>%
   filter(n_play_action == 0 & n_man_in_motion == 0) %>%
@@ -284,4 +284,39 @@ sample_play <- all_weeks_db %>%
 # This is all done by calc_nearest_d_per_frame and is in thesis_helpers
 # Data is already calculated and stored in all_data
 # The closest_defender column is NA because it is a relic of unnesting, dont worry
+
+# Now to play around with this info
+# I want to know if there are any marked changes before / after play action
+# That means I want a plot of avg_separation before / during / after the RPO
+# event separated by target / not target
+rpo_frame <- pa_and_mim_plays %>%
+  filter(event %in% c("play_action", "run_pass_option")) %>%
+  group_by(game_id, play_id, frame_id) %>%
+  summarize(n_pa = sum(
+    event %in% c("play_action", "run_pass_option"), na.rm = TRUE)) %>%
+  group_by(game_id, play_id) %>%
+  arrange(desc(n_pa)) %>%
+  slice(1) %>%
+  select(game_id, play_id, rpo_frame = frame_id)
+
+play_start <- c("ball_snap", "snap_direct")
+play_pass_arrive <- c("pass_arrived", "pass_outcome_caught",
+                      "pass_outcome_incomplete", "pass_outcome_interception",
+                      "pass_outcome_interception", "pass_outcome_touchdown",
+                      "pass_tipped")
+
+# This takes like 30+ minutes, improve efficiency
+pa_and_mim_plays_standardized <- pa_and_mim_plays %>%
+  left_join(rpo_frame, by = c("game_id", "play_id")) %>%
+  mutate(new_frame_id = frame_id - rpo_frame) %>%
+  group_by(game_id, play_id, frame_id) %>%
+  mutate(frame_play_start = sum(event %in% play_start, na.rm = TRUE),
+         frame_pass_arrive = sum(event %in% play_pass_arrive, na.rm = TRUE)) %>%
+  group_by(game_id, play_id) %>%
+  arrange(desc(frame_play_start)) %>%
+  mutate(frame_start = first(frame_id)) %>%
+  arrange(desc(frame_pass_arrive)) %>%
+  mutate(frame_end = first(frame_id)) %>%
+  ungroup() %>%
+  filter(between(frame_id, frame_start, frame_end))
 
