@@ -300,23 +300,50 @@ rpo_frame <- pa_and_mim_plays %>%
   select(game_id, play_id, rpo_frame = frame_id)
 
 play_start <- c("ball_snap", "snap_direct")
+play_pass_start <- c("pass_forward")
 play_pass_arrive <- c("pass_arrived", "pass_outcome_caught",
                       "pass_outcome_incomplete", "pass_outcome_interception",
                       "pass_outcome_interception", "pass_outcome_touchdown",
                       "pass_tipped")
 
 # This takes like 30+ minutes, improve efficiency
+# Actually it works way faster now? Maybe my computer was bogged down
 pa_and_mim_plays_standardized <- pa_and_mim_plays %>%
   left_join(rpo_frame, by = c("game_id", "play_id")) %>%
   mutate(new_frame_id = frame_id - rpo_frame) %>%
   group_by(game_id, play_id, frame_id) %>%
   mutate(frame_play_start = sum(event %in% play_start, na.rm = TRUE),
-         frame_pass_arrive = sum(event %in% play_pass_arrive, na.rm = TRUE)) %>%
+         frame_pass_start = sum(event %in% play_pass_start, na.rm = TRUE)) %>%
   group_by(game_id, play_id) %>%
   arrange(desc(frame_play_start)) %>%
   mutate(frame_start = first(frame_id)) %>%
-  arrange(desc(frame_pass_arrive)) %>%
-  mutate(frame_end = first(frame_id)) %>%
+  arrange(desc(frame_pass_start)) %>%
+  mutate(frame_release = first(frame_id)) %>%
   ungroup() %>%
-  filter(between(frame_id, frame_start, frame_end))
+  filter(between(frame_id, frame_start, frame_release))
 
+# Plot change in separation about time of RPO
+  # Lets limit # plays for first go, dont want to crash plot
+a_few_plays <- pa_and_mim_plays_standardized %>%
+  select(game_id, play_id) %>%
+  distinct() %>%
+  slice_sample(n = 100)
+
+pa_and_mim_plays_standardized %>%
+  inner_join(a_few_plays, by = c("game_id", "play_id")) %>%
+  replace_na(list(target = 0)) %>%
+  filter(position %in% c("WR", "RB", "TE", "FB")) %>%
+  mutate(game_play = paste0(game_id, "_", play_id, "_", nfl_id)) %>%
+  ggplot(aes(x = new_frame_id, y = separation, col = target, group = target)) +#, group = game_play)) +
+  #geom_point() +
+  #geom_line() +
+  geom_smooth(method = "loess") + 
+  geom_vline(xintercept = 0) #+
+  #theme(legend.position = "none")
+# Separation obviously decreases for targeted receivers after a certain point due to
+# defenders seeing the ball released
+# I should have filtered on pass released
+# I now have filtered on pass release, still a little wonky
+# Though I feel like I understand the relationship between separation and target
+# The real comparison I need is post snap openness of non-rpo plays with rpos
+# Specifically need a marker to estimate when the RPO would have happened
