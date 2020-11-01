@@ -498,7 +498,7 @@ make_gif <- function(example_play, handoff_frame, n_frames, inf_or_grad = 'inf')
   
   # Make influence / grad data for each frame in the play
   influence_data <- example_play %>%
-    nest(-game_id, -play_id, -frame_id, -nfl_id_rusher) %>%
+    nest(-game_id, -play_id, -frame_id) %>%
     filter(frame_id >= handoff_frame, frame_id <= (handoff_frame + n_frames)) %>%
     mutate(inf = map2(data, nfl_id_rusher, ~get_zone_influence(.x, .y)),
            grad = map2(inf, data, ~ calc_gradient(.x, .y)))

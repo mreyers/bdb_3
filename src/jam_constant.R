@@ -25,7 +25,9 @@ game_deets <- team_info %>% select(gameId,homeTeamAbbr,visitorTeamAbbr)
 week_by_week_df <- paste0("data/",list.files("data/",pattern = "*week[0-9]+.csv")) 
 
 ## get top speed and closest defender for each WR here.
+## could think about parallelizing this. So things are done fast 
 rec_scores <- data.frame()
+
 for(i in seq_along(week_by_week_df)){
   print(glue::glue({"Processing Week {i}"}))
   raw_data <- read_csv(week_by_week_df[i])
@@ -33,22 +35,10 @@ for(i in seq_along(week_by_week_df)){
   rec_scores <- bind_rows(rec_scores,train_df)
 }
 
+saveRDS(rec_scores,"rec_jam_raw_data.rds")
+rec_scores <- rec_scores %>% select(-tracking_data,-def_tracking,-five_yards_track)
 ## take that total dataframe and create z-scores
 ## note: create a residual defender group (anything less than x)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

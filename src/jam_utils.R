@@ -30,6 +30,9 @@ closest_defender <- function(x_loc_target,y_loc_target, def_track_df){
 
 create_train_data <- function(week_df) {
   #browser()
+  # remove possible duplicates which seem to occur 
+  week_df <- week_df[!duplicated(week_df[,c("nflId","gameId","playId","frameId")]),]
+  
   # nest the tracking data by player
   print("Process the tracking data")
   nest_df <- week_df %>%
@@ -57,11 +60,11 @@ create_train_data <- function(week_df) {
       }),
       player_x_loc = purrr::map_dbl(five_yards_track, function(df) {
         snap_df = df %>% filter(event == "ball_snap")
-        snap_df %>% pull(x)
+        snap_df %>% slice(1) %>% pull(x) 
       }),
       player_y_loc = purrr::map_dbl(five_yards_track, function(df) {
         snap_df = df %>% filter(event == "ball_snap")
-        snap_df %>% pull(y)
+        snap_df %>% slice(1) %>% pull(y)
       })
     ) %>% left_join(def_tracking) %>% 
     filter(!map_lgl(def_tracking,is.null)) %>% 
@@ -71,6 +74,7 @@ create_train_data <- function(week_df) {
       closest_defender
     ))
   
+  # can remove all the nested dataframes in future.
   return(rec_tracking)
 }
 
