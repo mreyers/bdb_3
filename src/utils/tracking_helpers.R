@@ -210,7 +210,7 @@ get_zone_influence <- function(data, standardized = FALSE, start_or_end = 'start
       ungroup() %>%
       slice(1) %>%
       dplyr::select(frame_id) %>%
-      summarize(frame = first(frame_id)) %>%
+      summarize(frame = first(frame_id), .groups = "drop") %>%
       pull(frame) %>%
       as.numeric()
   }
@@ -328,11 +328,12 @@ get_zone_influence <- function(data, standardized = FALSE, start_or_end = 'start
     ungroup() %>% 
     filter(value > 1.30e-10) %>%
     group_by(s_1, s_2, team) %>%
-    summarize(team_total = sum(value)) %>%
+    summarize(team_total = sum(value), .groups = "drop") %>%
     group_by(s_1, s_2) %>%
     arrange(s_1, s_2, team) %>%
     summarize(away_inf = 1 / (1 + exp(-(first(team_total) - last(team_total))/ sum(team_total) )), 
-              home_inf = 1 / (1 + exp(-(last(team_total) - first(team_total))/ sum(team_total) ))) 
+              home_inf = 1 / (1 + exp(-(last(team_total) - first(team_total))/ sum(team_total) )),
+              .groups = "drop") 
   
   return(influence)
 }
@@ -905,21 +906,24 @@ air_distance <- function(pass_play, target_rec){
 
 # b) Target receiver separation
 # Probably should be done at time of pass
-separation <- function(pass_play, target_rec){
+separation <- function(pass_play, target_rec, start_or_end = "start"){
   # At time of pass arrival
   pass_play <- pass_play %>% ungroup() # Just in case
   
+  pass_event <- c("pass_forward", "pass_shovel")
+  if(start_or_end %in% "end"){
+    pass_event <- c("pass_outcome_incomplete", "pass_outcome_caught",
+                    "pass_outcome_interception", "pass_outcome_touchdown")
+  }
+  
   target_receiver_loc <- pass_play %>%
-    filter(nfl_id == target_rec, event %in% pass_air_start) %>%
+    filter(nfl_id == target_rec, event %in% pass_event) %>%
     slice(1) %>% # just in case
     select(x, y)
   
   if(dim(target_receiver_loc)[1] < 1){
     # pass arrived not in event data despite being a pass play, compromise down to diff result
-    target_receiver_loc <- pass_play %>%
-      filter(nfl_id == target_rec, frame_id == 30) %>% # in case no pass_start event
-      slice(1) %>% # just in case
-      select(x, y)
+    return(NA)
   }
   
   # Get closest defender
