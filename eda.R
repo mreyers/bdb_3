@@ -148,18 +148,211 @@ for(i in weeks){
                 group_by(play_id) %>%
                 arrange(desc(n_off)) %>%
                 mutate(poss_team = first(team)) %>%
-                ungroup())
+                ungroup() %>%
+                mutate(f_last = paste0(substr(display_name, 1, 1),
+                                       ".",
+                                       str_extract(display_name, "[A-z\\']+$"))))
 }
 
-saveRDS(all_data, "Data/all_data.rds")
+# Cant use nflscrapR or nflfastR for competition
+# Handles Sacks appropriately
+plays_parsed <- plays %>%
+  mutate(likely_receiver = map2_chr(play_description, pass_result,
+                                    ~ quick_str_parse(.x, .y))) %>%
+  select(game_id, play_id, likely_receiver) %>%
+  mutate(target = TRUE)
 
-con <- DBI::dbConnect(RSQLite::SQLite(), dbname = ":memory:")
-copy_to(con, all_data, "all_weeks")
+all_data_targets <- all_data %>%
+  left_join(plays_parsed, by = c("game_id",
+                               "play_id",
+                               "f_last" = "likely_receiver"))
+
+# Additionally add the nearest defenders
+holder <- all_data_targets %>%
+  nest(-c(game_id, play_id)) %>%
+  mutate(closest_defender = map(data, calc_nearest_d_per_frame))
+
+join_set <- holder %>%
+  select(game_id, play_id, closest_defender) %>%
+  unnest(closest_defender)
+
+all_data_targets_and_distance <- all_data_targets %>%
+  left_join(join_set,
+            by = c("game_id", "play_id", "frame_id", "nfl_id"))
+
+saveRDS(all_data_targets_and_distance, "Data/all_data.rds")
+rm(plays_parsed)
 rm(all_data)
+
+# Set up dbplyr framework for better efficiency
+con <- DBI::dbConnect(RSQLite::SQLite(), dbname = ":memory:")
+copy_to(con, all_data_targets_and_distance, "all_weeks")
+#rm(all_data_targets_and_distance)
 
 all_weeks_db <- tbl(con, "all_weeks")
 
 # Can I just query from this now?
-all_weeks_db %>%
-  select(game_id) %>%
-  filter(game_id == 2018090600)
+# Query all Play Action and man in motion plays
+  # Use collect() to execute query into R data type
+pa_and_mim_plays <- all_weeks_db %>%
+  group_by(game_id, play_id) %>%
+  mutate(n_play_action = sum(event %in% c("play_action", "run_pass_option"), na.rm = TRUE),
+         n_man_in_motion = sum(event %in% "man_in_motion", na.rm = TRUE)) %>%
+  ungroup() %>%
+  filter(n_play_action > 0 | n_man_in_motion > 0) %>%
+  collect()
+
+pa_and_mim_plays %>%
+  ungroup() %>%
+  filter(game_id == first(game_id), play_id == first(play_id)) %>%
+  arrange(frame_id) %>%
+  View()
+# If no arrange(), output looks weird as all offence outputs come first
+# Make sure to use arrange to not confuse self
+
+# Standard plays i.e. no motion / play action
+standard_plays <- all_weeks_db %>%
+  group_by(game_id, play_id) %>%
+  mutate(n_play_action = sum(event %in% c("play_action", "run_pass_option"), na.rm = TRUE),
+         n_man_in_motion = sum(event %in% "man_in_motion", na.rm = TRUE)) %>%
+  ungroup() %>%
+  filter(n_play_action == 0 & n_man_in_motion == 0) %>%
+  collect()
+
+# Lets play around with outcomes quickly, as per the plays dataframe
+movement_plays_id <- pa_and_mim_plays %>%
+  group_by(game_id, play_id) %>%
+  slice(1) %>%
+  select(game_id, play_id) %>%
+  ungroup() %>%
+  left_join(plays, by = c("game_id", "play_id")) %>%
+  mutate(play_type = "movement")
+
+standard_plays_id <- standard_plays %>%
+  group_by(game_id, play_id) %>%
+  slice(1) %>%
+  select(game_id, play_id) %>%
+  ungroup() %>%
+  left_join(plays, by = c("game_id", "play_id")) %>%
+  mutate(play_type = "standard")
+
+play_partitions <- movement_plays_id %>%
+  bind_rows(standard_plays_id)
+
+# Quick check: Are play action and standard plays more effective on average?
+  # Answer: Yes, in every reasonable metric that is easy to calculate.
+play_partitions %>%
+  group_by(play_type) %>%
+  summarize(avg_epa = mean(epa),
+            avg_success = mean(epa > 0),
+            prop_comp = mean(pass_result %in% "C"))
+
+# More checking: How do the options compare over down and distance?
+  # Answer avg_epa: A little sporadic in avg_epa, frequently seems better
+  # but sample sizes are limited, within error of standard plays
+  # Answer avg_success: Completely blankets standard plays, but again
+  # is likely within error
+  # Answer prop_comp: Seems more useful, especially 1st and 3rd down
+
+play_partitions %>%
+  group_by(play_type, down, yards_to_go) %>%
+  summarize(avg_epa = mean(epa),
+            avg_success = mean(epa > 0),
+            prop_comp = mean(pass_result %in% "C"),
+            n = n()) %>%
+  filter(yards_to_go <= 15) %>%
+  ggplot(aes(x = yards_to_go, y = prop_comp, col = play_type, size = n)) +
+  geom_point() +
+  geom_line(size = 1) +
+  geom_vline(xintercept = 10, col = "red") +
+  facet_wrap(~ down)
+
+# With more effort, lets calculate the openness of each receiver with respect
+# to their nearest defender on any given play
+# Then summarize as separation for targeted receiver and average separation
+# on the play in general
+
+# Would be super cool if I could do this on any given frame, make general
+sample_play <- all_weeks_db %>%
+  filter(game_id == 2018090600,
+         play_id == 402) %>%
+  collect()
+
+# For each offence player, find nearest defender
+# Probably need a super slow for loop or to do some weird nesting
+# Weird nesting it is, followed by left joining back to main data set
+# This is all done by calc_nearest_d_per_frame and is in thesis_helpers
+# Data is already calculated and stored in all_data
+# The closest_defender column is NA because it is a relic of unnesting, dont worry
+
+# Now to play around with this info
+# I want to know if there are any marked changes before / after play action
+# That means I want a plot of avg_separation before / during / after the RPO
+# event separated by target / not target
+rpo_frame <- pa_and_mim_plays %>%
+  filter(event %in% c("play_action", "run_pass_option")) %>%
+  group_by(game_id, play_id, frame_id) %>%
+  summarize(n_pa = sum(
+    event %in% c("play_action", "run_pass_option"), na.rm = TRUE)) %>%
+  group_by(game_id, play_id) %>%
+  arrange(desc(n_pa)) %>%
+  slice(1) %>%
+  select(game_id, play_id, rpo_frame = frame_id)
+
+play_start <- c("ball_snap", "snap_direct")
+play_pass_start <- c("pass_forward")
+play_pass_arrive <- c("pass_arrived", "pass_outcome_caught",
+                      "pass_outcome_incomplete", "pass_outcome_interception",
+                      "pass_outcome_interception", "pass_outcome_touchdown",
+                      "pass_tipped")
+
+# This takes like 30+ minutes, improve efficiency
+# Actually it works way faster now? Maybe my computer was bogged down
+pa_and_mim_plays_standardized <- pa_and_mim_plays %>%
+  left_join(rpo_frame, by = c("game_id", "play_id")) %>%
+  mutate(new_frame_id = frame_id - rpo_frame) %>%
+  group_by(game_id, play_id, frame_id) %>%
+  mutate(frame_play_start = sum(event %in% play_start, na.rm = TRUE),
+         frame_pass_start = sum(event %in% play_pass_start, na.rm = TRUE)) %>%
+  group_by(game_id, play_id) %>%
+  arrange(desc(frame_play_start)) %>%
+  mutate(frame_start = first(frame_id)) %>%
+  arrange(desc(frame_pass_start)) %>%
+  mutate(frame_release = first(frame_id)) %>%
+  ungroup() %>%
+  filter(between(frame_id, frame_start, frame_release))
+
+# Plot change in separation about time of RPO
+  # Lets limit # plays for first go, dont want to crash plot
+a_few_plays <- pa_and_mim_plays_standardized %>%
+  select(game_id, play_id) %>%
+  distinct() %>%
+  slice_sample(n = 100)
+
+pa_and_mim_plays_standardized %>%
+  inner_join(a_few_plays, by = c("game_id", "play_id")) %>%
+  replace_na(list(target = 0)) %>%
+  filter(position %in% c("WR", "RB", "TE", "FB")) %>%
+  mutate(game_play = paste0(game_id, "_", play_id, "_", nfl_id)) %>%
+  ggplot(aes(x = new_frame_id, y = separation, col = target, group = target)) +#, group = game_play)) +
+  #geom_point() +
+  #geom_line() +
+  geom_smooth(method = "loess") + 
+  geom_vline(xintercept = 0) #+
+  #theme(legend.position = "none")
+
+# Separation obviously decreases for targeted receivers after a certain point due to
+# defenders seeing the ball released
+# I should have filtered on pass released
+# I now have filtered on pass release, still a little wonky
+# Though I feel like I understand the relationship between separation and target
+# The real comparison I need is post snap openness of non-rpo plays with rpos
+# Specifically need a marker to estimate when the RPO would have happened
+
+# To better evaluate defence, I probably need framewise completion probability
+# Time to fix up my thesis work I think
+# Since the point isnt to evaluate QBs, I can use pass arrival components in
+# model building
+# This will require some modifications as the model currently doesnt have these
+# features.
+# Transition over to that work to build out

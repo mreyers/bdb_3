@@ -1697,3 +1697,57 @@ qb_tuck <- function(sack_or_run){
   
   return(qb_id)
 }
+
+########
+# New functions for BDB 3
+########
+
+# No nflscrapr allowed, just string parse
+quick_str_parse <- function(play_desc, pass_result){
+  
+  to_parse <- str_extract_all(play_desc, "[A-Z]\\.[A-z\\'\\-]+")
+  if(pass_result %in% "IN" & str_detect(play_desc, "intended")){
+    # Need to verify there is an intended, otherwise NA
+    return(to_parse[[1]][2])
+  }
+  if(pass_result %in% c("C", "I") & length(to_parse[[1]]) >= 2){
+    return(to_parse[[1]][2])
+  }
+  return(NA_character_)
+}
+
+# Used to calculated all eligible receivers' nearest defenders
+calc_nearest_d_per_frame <- function(pass_play){
+  
+  check <- pass_play %>%
+    pull(team) %>%
+    unique()
+  
+  if(!(all(c("home", "away") %in% check))){
+    print("At least one of Home or Away does not exist. Return NA")
+    return(NA)
+  }
+  pass_play_nest <- pass_play %>%
+    # Remove football and QB as they arent relevant to closest D match
+    filter(!(team %in% "football"),
+           !(position %in% "QB")) %>%
+    mutate(is_poss_team = if_else(team == poss_team, "off", "def")) %>%
+    nest(-c(is_poss_team, frame_id)) %>%
+    # Weird nest setup to allow each offence player to matchup all D
+    pivot_wider(names_from = is_poss_team, values_from = data) %>%
+    unnest(off, names_sep = "_") %>%
+    unnest(def, names_sep = "_") 
+
+  pass_play_nest <- pass_play_nest %>%
+    mutate(dist_to_player = sqrt((off_x - def_x) ^ 2 + (off_y - def_y) ^ 2)) %>%
+    group_by( frame_id, off_nfl_id) %>%
+    arrange(dist_to_player) %>%
+    slice(1) %>%
+    ungroup() %>%
+    select(frame_id, nfl_id = off_nfl_id,
+           closest_defender_name = def_display_name,
+           closest_defender_id = def_nfl_id,
+           separation = dist_to_player)
+  
+  return(pass_play_nest)
+}
