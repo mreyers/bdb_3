@@ -45,6 +45,8 @@ players <- read_csv("Data/players.csv", col_types = cols()) %>%
   janitor::clean_names(case = "snake") 
 plays <- read_csv("Data/plays.csv", col_types = cols()) %>%
   janitor::clean_names(case = "snake")
+target <- read_csv("Data/additional_data/targetedReceiver.csv", col_types = cols()) %>%
+  janitor::clean_names(case = "snake")
 
 my_play <- one_week %>%
   filter(game_id == first(game_id), play_id == first(play_id)) %>%
@@ -172,3 +174,119 @@ for(i in 1:1){
   
   rm(one_week, my_plays)
 }
+
+# The above is to populate influence values
+# I have additional things to work on now
+# A few things of interest are how we can get reaction time
+# Lucas is going to handle nearest defender and coverage
+# Im going to handle some really simple summary reaction times
+possession <- my_play %>%
+  filter(team != "football") %>%
+  group_by(game_id, play_id, team) %>%
+  summarize(n_off_players = sum(position %in% c("QB", "RB", "WR", "TE")),
+            .groups = "drop_last") %>%
+  arrange(desc(n_off_players)) %>%
+  mutate(team_role = if_else(team == first(team), "off", "def")) %>%
+  select(game_id, play_id, team, team_role)
+  
+play_pass_start <- c("pass_forward", "pass_shovel")
+play_pass_arrive <- c("pass_outcome_caught",
+                      "pass_outcome_incomplete", "pass_outcome_interception",
+                      "pass_outcome_interception", "pass_outcome_touchdown")
+# How?
+  # Take throw frame and arrival frame
+  # Pull receiver and all defenders
+  # Measure distances
+  # Calculate delta distance
+my_play_with_receiver <- my_play %>%
+  left_join(target, by = c("game_id", "play_id")) %>%
+  left_join(possession, by = c("game_id", "play_id", "team")) %>%
+  filter(team_role %in% "def" | nfl_id == target_nfl_id) %>%
+  mutate(pass_start = (event %in% play_pass_start),
+         pass_arrival = (event %in% play_pass_arrive)) %>%
+  filter(pass_start | pass_arrival) %>%
+  # TRUE and FALSE groups, grabbing first frame_id will get the first frame in which
+  # there was a pass_start event and the first frame with a pass_arrival event
+  # Dont want multiple of each event as that becomes cumbersome
+  group_by(pass_start) %>%
+  filter(frame_id == first(frame_id)) %>%
+  mutate(receiver_x = sum((team_role == "off") * x, na.rm = TRUE),
+         receiver_y = sum((team_role == "off") * y, na.rm = TRUE),
+         dist_to_receiver = sqrt((x - receiver_x) ^ 2 + (y - receiver_y) ^ 2)) %>%
+  group_by(nfl_id,  display_name) %>%
+  arrange(desc(frame_id)) %>%
+  # Negative is good
+  summarize(closed_distance = first(dist_to_receiver) - last(dist_to_receiver),
+            distance_to_go_still = first(dist_to_receiver),
+            time_elapsed_in_frames = first(frame_id) - last(frame_id),
+            time_elapsed_in_seconds = time_elapsed_in_frames / 10,
+            .groups = "drop")
+
+all_weeks_combos <- tibble()
+for(i in 1:17){
+  one_week <- read_csv(paste0("Data/week", i, ".csv")) %>%
+    janitor::clean_names()
+  
+  my_play <- one_week %>%
+    rename(velocity = s)
+  
+  possession <- my_play %>%
+    filter(team != "football") %>%
+    group_by(game_id, play_id, team) %>%
+    summarize(n_off_players = sum(position %in% c("QB", "RB", "WR", "TE")),
+              .groups = "drop_last") %>%
+    arrange(desc(n_off_players)) %>%
+    mutate(team_role = if_else(team == first(team), "off", "def")) %>%
+    select(game_id, play_id, team, team_role)
+  
+  my_play_with_receiver <- my_play %>%
+    left_join(target, by = c("game_id", "play_id")) %>%
+    left_join(possession, by = c("game_id", "play_id", "team")) %>%
+    filter(team_role %in% "def" | nfl_id == target_nfl_id) %>%
+    mutate(pass_start = (event %in% play_pass_start),
+           pass_arrival = (event %in% play_pass_arrive)) %>%
+    filter(pass_start | pass_arrival) %>%
+    # TRUE and FALSE groups, grabbing first frame_id will get the first frame in which
+    # there was a pass_start event and the first frame with a pass_arrival event
+    # Dont want multiple of each event as that becomes cumbersome
+    group_by(game_id, play_id, pass_start) %>%
+    filter(frame_id == first(frame_id)) %>%
+    mutate(receiver_x = sum((team_role == "off") * x, na.rm = TRUE),
+           receiver_y = sum((team_role == "off") * y, na.rm = TRUE),
+           dist_to_receiver = sqrt((x - receiver_x) ^ 2 + (y - receiver_y) ^ 2)) %>%
+    group_by(game_id, play_id, nfl_id,  display_name, team_role) %>%
+    arrange(desc(frame_id)) %>%
+    # Negative is good
+    summarize(closed_distance = first(dist_to_receiver) - last(dist_to_receiver),
+              distance_to_go_still = first(dist_to_receiver),
+              time_elapsed_in_frames = first(frame_id) - last(frame_id),
+              time_elapsed_in_seconds = time_elapsed_in_frames / 10,
+              .groups = "drop")
+  
+  all_weeks_combos <- all_weeks_combos %>%
+    bind_rows(my_play_with_receiver)
+}
+
+all_weeks_combos
+
+# I wonder what some basic summary info would look like
+# Things such as how much distance a player closed in on the receiver, how close they were
+# Note there are some clear hail mary plays in here
+  # This is observed by the weirdly large avg_start_distance values and having receivers (Logan Thomas)
+  # on defence. This is the hands team, like the play Gronk screwed up against the Dolphins
+am_a_receiver <- target %>%
+  group_by(target_nfl_id) %>%
+  summarize(n = n()) %>%
+  pull(target_nfl_id)
+
+all_weeks_combos %>%
+  # remove receivers
+  filter(team_role %in% "def",
+         !(nfl_id %in% am_a_receiver)) %>%
+  group_by(nfl_id, display_name) %>%
+  summarize(avg_closed_distance = mean(closed_distance),
+            avg_distance_to_go = mean(distance_to_go_still),
+            avg_start_distance = mean(distance_to_go_still - avg_closed_distance)) %>%
+  arrange((avg_closed_distance)) %>%
+  left_join(players %>% select(nfl_id, position),
+            by = "nfl_id")
