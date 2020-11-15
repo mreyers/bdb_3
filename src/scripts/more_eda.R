@@ -33,6 +33,8 @@
 # Main
 # # # #
 library(tidyverse)
+library(mvtnorm)
+source("src/utils/tracking_helpers.R")
 
 one_week <- read_csv("Data/week1.csv") %>%
   janitor::clean_names()
@@ -115,19 +117,17 @@ new_zone_influence <- function(data){
   # Now we will try to do the same thing over all the players in one play
   # This needs to be normalized by player position at handoff
   density_calc <- my_play_with_features %>% 
-    mutate(current_density = pmap_dbl(list(x, y, mu_i, cov_struc),
-                                      ~ dmvnorm(c(..1, ..2), mean = ..3, sigma = ..4))) %>%
-    mutate(density_val = pmap(list(mu_i, cov_struc, current_density),
-                              ~ dmvnorm(data_grid, mean = ..1, sigma = ..2) / ..3))
+    mutate(density_val = map2(mu_i, cov_struc,
+                              ~ dmvnorm(data_grid, mean = .x, sigma = .y)))
   
   density_field <-
     density_calc %>% 
-    dplyr::select(density_val, nfl_id, play_id, game_id, frame_id, team, jersey_number) %>% 
+    dplyr::select(density_val, nfl_id, frame_id, team, jersey_number) %>% 
     mutate(density_val = map(density_val, ~ bind_cols(as_tibble(.x), as_tibble(data_grid)))) %>% 
     unnest(cols = c(density_val))
   
   
-  # Next is the player influence
+  # Next is the player influence, standardize by max player value
   influence <- density_field %>% 
     group_by(nfl_id) %>% 
     dplyr::arrange(nfl_id, desc(value)) %>%
@@ -140,19 +140,35 @@ new_zone_influence <- function(data){
     arrange(team) %>%
     summarize(away_inf = 1 / (1 + exp(-(first(team_total) - last(team_total)) )), 
               home_inf = 1 / (1 + exp(-(last(team_total) - first(team_total)) )),
-              .groups = "drop")
+              .groups = "drop") %>%
+    filter(away_inf != 0.5, home_inf != 0.5)
   
   return(influence)
 }
 
-tictoc::tic()
-holder <- new_zone_influence(my_play)
-tictoc::toc()
 
-tictoc::tic()
-orig <- my_play %>%
-  mutate(frame_id_2 = frame_id) %>%
-  nest(-frame_id_2) %>%
-  mutate(orig = map(data, ~ get_zone_influence(., standardized = FALSE,
-                                               start_or_end = "start", lazy = TRUE, run = FALSE)))
-tictoc::toc()
+library(furrr)
+plan(multisession, workers = availableCores() - 2)
+
+# 96k, 69k, 65k, 186k, 38k
+for(i in 1:1){
+  # Read in each week, add influence data, save, go next
+  one_week <- read_csv(paste0("Data/week", i, ".csv")) %>%
+    janitor::clean_names()
+  
+  my_plays <- one_week %>%
+    rename(velocity = s)
+  
+  tictoc::tic()
+  holder <- my_plays %>%
+    nest(data = c(time, x, y, velocity, a, dis, o, dir, event, nfl_id, display_name, 
+                  jersey_number, position, frame_id, team, play_direction, 
+                  route)) %>%
+    mutate(inf_check = future_map(data, purrr::safely(new_zone_influence))) %>%
+    select(game_id, play_id, inf_check)
+  tictoc::toc()
+  
+  saveRDS(holder, paste0("Data/additional_data/week", i, "_influence.rds"))
+  
+  rm(one_week, my_plays)
+}
