@@ -279,6 +279,9 @@ am_a_receiver <- target %>%
   summarize(n = n()) %>%
   pull(target_nfl_id)
 
+# This isnt quite right as its not always the closest defender to the receiver
+# Its all defenders within a play, thus the large distances
+  # Dont use avg_distance_to_go
 all_weeks_combos %>%
   # remove receivers
   filter(team_role %in% "def",
