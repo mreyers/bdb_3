@@ -151,7 +151,7 @@ library(furrr)
 plan(multisession, workers = availableCores() - 2)
 
 # 96k, 69k, 65k, 186k, 38k
-for(i in 1:1){
+for(i in 2:17){
   # Read in each week, add influence data, save, go next
   one_week <- read_csv(paste0("Data/week", i, ".csv")) %>%
     janitor::clean_names()
@@ -170,5 +170,6 @@ for(i in 1:1){
   
   saveRDS(holder, paste0("Data/additional_data/week", i, "_influence.rds"))
   
-  rm(one_week, my_plays)
+  rm(one_week, my_plays, holder)
 }
+# 1200 seconds for week 1, only 20 minutes
