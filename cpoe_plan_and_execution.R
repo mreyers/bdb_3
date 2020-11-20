@@ -30,3 +30,18 @@
 # # # #
 
 # 1. Source in observed model from nfl_tracking
+  # Code and model are complete there, next time I run just save as RDS and load here
+
+# 2. Source in the covariates, either by loading or creating (do by week)
+  # Simple covariates
+    # 'air_dist', 'rec_separation', 'sideline_sep', 'no_frame_rush_sep', 
+    # 'qb_vel', 'time_to_throw', 'dist_from_pocket', 
+    # 'air_yards_x',
+    # 'yardline_100', 'down', 'ydstogo'
+
+
+  # Ownership covariates
+    # 'n_cells_at_throw',
+    # 'own_intensity_at_throw', 
+    # 'own_avg_intensity_at_throw',
+
