@@ -63,12 +63,15 @@ library(lme4)
 test_model <- lmer(top_speed_z ~ (1|route) + (1|defender_id),data=rec_z2)
 randoms <-ranef(test_model)
 
+## continued work here 
+## 1) player fatigure, how many snaps have they played over the course of the game
+###   - maybe restart the snap count at half time, because there is rest? Or not
+### 
+### Pair this with location of whether they line up against WR1,WR2,slot corners? 
+## 
+
 
 player_names <- read_csv("data/players.csv")
-
-
-
-
 def_rand_value <- randoms$defender_id %>% tibble::rownames_to_column(var = "nflId") %>% 
   mutate(nflId = as.numeric(nflId)) %>% 
   left_join(player_names) %>% 
