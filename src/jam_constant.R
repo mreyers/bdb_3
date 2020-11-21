@@ -26,17 +26,17 @@ week_by_week_df <- paste0("data/",list.files("data/",pattern = "*week[0-9]+.csv"
 
 ## get top speed and closest defender for each WR here.
 ## could think about parallelizing this. So things are done fast 
-rec_scores <- data.frame()
-
-for(i in seq_along(week_by_week_df)){
-  print(glue::glue({"Processing Week {i}"}))
-  raw_data <- read_csv(week_by_week_df[i])
-  train_df <- create_train_data(raw_data)
-  rec_scores <- bind_rows(rec_scores,train_df)
-}
-
-rec_scores <- rec_scores %>% select(-tracking_data,-def_tracking,-five_yards_track)
-saveRDS(rec_scores,"rec_jam_raw_data.rds")
+# rec_scores <- data.frame()
+# 
+# for(i in seq_along(week_by_week_df)){
+#   print(glue::glue({"Processing Week {i}"}))
+#   raw_data <- read_csv(week_by_week_df[i])
+#   train_df <- create_train_data(raw_data)
+#   rec_scores <- bind_rows(rec_scores,train_df)
+# }
+# 
+# rec_scores <- rec_scores %>% select(-tracking_data,-def_tracking,-five_yards_track)
+# saveRDS(rec_scores,"rec_jam_raw_data.rds")
 ## take that total dataframe and create z-scores
 ## note: create a residual defender group (anything less than x)
 
@@ -58,12 +58,9 @@ rec_z2 <- rec_z %>%
 
 
 
-
-
 library(lme4)
 
 test_model <- lmer(top_speed_z ~ (1|route) + (1|defender_id),data=rec_z2)
-
 randoms <-ranef(test_model)
 
 
