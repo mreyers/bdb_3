@@ -81,22 +81,12 @@ create_train_data <- function(week_df) {
 create_z_scores <- function(full_df){
   ## create z-scores
   print("Create Z-Scores and Find Closest Defender")
-  rec_z_scores = rec_tracking %>% select(
-    -tracking_data,
-    -def_tracking,
+  rec_z_scores = full_df %>% select(
     -homeTeamAbbr,
-    -visitorTeamAbbr,
-    -five_yards_track
-  ) %>%
+    -visitorTeamAbbr) %>%
     group_by(displayName, route) %>%
     mutate(top_speed_z = as.vector(scale(top_speed))) %>%
     ungroup() 
     
   return(rec_z_scores)
 }
-
-create_train_data(week_df = raw_data)
-
-
-test2 = test %>% group_by(displayName, route) %>%
-  mutate(top_speed_z = as.vector(scale(top_speed))) 
