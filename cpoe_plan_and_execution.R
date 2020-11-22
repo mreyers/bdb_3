@@ -28,12 +28,21 @@
 # # # #
 # Main
 # # # #
+library(futile.logger)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(future)
+library(furrr)
+library(purrr)
 
+source("src/utils/tracking_helpers.R")
 # 1. Source in observed model from nfl_tracking
   # Code and model are complete there, next time I run just save as RDS and load here
+cp_at_release_model <- readRDS("~/GitHub/nfl_tracking/src/Data_new/release/comp_prob.rds")
 
 # 2. Source in the covariates, either by loading or creating (do by week)
-  # Simple covariates
+  # Simple covariates (done in simple_covariates.R)
     # 'air_dist', 'rec_separation', 'sideline_sep', 'no_frame_rush_sep', 
     # 'qb_vel', 'time_to_throw', 'dist_from_pocket', 
     # 'air_yards_x',
@@ -44,4 +53,5 @@
     # 'n_cells_at_throw',
     # 'own_intensity_at_throw', 
     # 'own_avg_intensity_at_throw',
-
+  # Done in more_eda.R, to be moved to a better named file later
+week1_inf <- readRDS("Data/additional_data/week1_influence.rds")

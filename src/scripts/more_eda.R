@@ -153,7 +153,7 @@ library(furrr)
 plan(multisession, workers = availableCores() - 2)
 
 # 96k, 69k, 65k, 186k, 38k
-for(i in 2:17){
+for(i in 1:17){
   # Read in each week, add influence data, save, go next
   one_week <- read_csv(paste0("Data/week", i, ".csv")) %>%
     janitor::clean_names()

@@ -167,7 +167,13 @@ get_R_i_t = function(x){
 # Establish the zone influence on a frame by frame basis
 # This will need to be changed, no rusher interest anymore
 get_zone_influence <- function(data, standardized = FALSE, start_or_end = 'start',
-                               lazy = FALSE, run = FALSE){
+                               lazy = FALSE, run = FALSE, is_football = FALSE){
+  
+  # Change ball name dependent on data set
+  ball_name <- "ball"
+  if(is_football){
+    ball_name <- "football"
+  }
   
   if(standardized){
     # Has been standardized, rename 2 variables
@@ -176,6 +182,7 @@ get_zone_influence <- function(data, standardized = FALSE, start_or_end = 'start
   } else{
     myPlay <- data 
   }
+  
   if(start_or_end %in% 'start'){
     # Want to filter down to the start of a pass
     pass_cond <- c('pass_forward', 'pass_shovel')
@@ -210,11 +217,11 @@ get_zone_influence <- function(data, standardized = FALSE, start_or_end = 'start
       ungroup() %>%
       slice(1) %>%
       dplyr::select(frame_id) %>%
-      summarize(frame = first(frame_id), .groups = "drop") %>%
+      summarize(frame = first(frame_id)) %>%
       pull(frame) %>%
       as.numeric()
   }
-
+  
   
   # Input speeds are in yards per second, convert to metres per second for formula
   throw_time_positions <- myPlay %>%
@@ -223,7 +230,7 @@ get_zone_influence <- function(data, standardized = FALSE, start_or_end = 'start
   # Dont need qb location, need ball location instead
   ball_loc <- 
     throw_time_positions %>%
-    filter(team %in% "football") %>%
+    filter(team %in% ball_name) %>%
     select(x, y)
   
   qb_loc <- 
@@ -270,12 +277,18 @@ get_zone_influence <- function(data, standardized = FALSE, start_or_end = 'start
     throw_time_positions %>% 
     mutate(cov_struc = map2(R, S_i_t, ~ .x %*% .y %*% .y %*% solve(.x)))
   
-  play_dir <- myPlay %>%
-    slice(1) %>%
+  avg_position <- myPlay %>%
+    filter(team %in% c("away", "home")) %>%
+    mutate(is_poss_team = ifelse(poss_team == team, 1, 0)) %>%
+    group_by(is_poss_team) %>%
+    summarize(avg_pos = mean(x, na.rm = TRUE), .groups = "drop") %>%
+    arrange(avg_pos) %>%
+    summarize(play_direction = ifelse(first(is_poss_team) == 1, 'right', 'left'),
+              .groups = "drop") %>%
     pull(play_direction)
   
   # Restrict field for efficiency
-  if(play_dir %in% 'left'){
+  if(avg_position %in% 'left'){
     # QB is furthest right that we care about
     x_bounds <-
       throw_time_positions %>% 
@@ -290,7 +303,7 @@ get_zone_influence <- function(data, standardized = FALSE, start_or_end = 'start
                 max_x = 120) %>% 
       slice(1)
   }
-
+  
   # We can now calculate the density of a player over the whole field
   data_grid <- expand.grid(s_1 = seq(x_bounds$min_x, x_bounds$max_x, by = 1),
                            s_2 = seq(-10, 53, by = 1)) # previously res, now 1
@@ -467,10 +480,10 @@ get_grad_plot <- function(gradient_results, handoff_time_positions){
 }
 
 # GIF a collection of frames, be it a given play and influence or a gradient and influence
-make_gif <- function(example_play, inf_or_grad = 'inf'){
+make_gif <- function(example_play, handoff_frame, n_frames, inf_or_grad = 'inf'){
   
   handoff_time_positions <- example_play %>%
-    slice(1)
+    filter(frame_id == handoff_frame)
   
   xmin <- 0
   xmax <- 160/3
@@ -493,31 +506,30 @@ make_gif <- function(example_play, inf_or_grad = 'inf'){
   
   # Make influence / grad data for each frame in the play
   influence_data <- example_play %>%
-    mutate(frame_id_2 = frame_id) %>%
-    nest(-game_id, -play_id, -frame_id_2) %>%
-    #filter(frame_id >= handoff_frame, frame_id <= (handoff_frame + n_frames)) %>%
-    mutate(inf = map(data, ~get_zone_influence(., lazy = TRUE)),
+    nest(-game_id, -play_id, -frame_id, -nfl_id_rusher) %>%
+    filter(frame_id >= handoff_frame, frame_id <= (handoff_frame + n_frames)) %>%
+    mutate(inf = map2(data, nfl_id_rusher, ~get_zone_influence(.x, .y)),
            grad = map2(inf, data, ~ calc_gradient(.x, .y)))
-  print(influence_data)
+  
   if(inf_or_grad %in% 'inf'){
     
     influence_data <- influence_data %>%
-      select(game_id, play_id, frame_id_2, inf) %>%
-      unnest(cols = c(inf)) %>%
+      select(game_id, play_id, frame_id, inf) %>%
+      unnest() %>%
       filter(home_inf != 0.5, away_inf != 0.5)
   } else{
     
     influence_data <- influence_data %>%
-      select(game_id, play_id, frame_id_2, grad) %>% 
+      select(game_id, play_id, frame_id, grad) %>% 
       unnest() %>%
       filter(grad_f != 0.25) %>%
       mutate( home_inf = grad_f, away_inf = grad_f)
   }
   
   influence_data <- influence_data %>%
+    unnest() %>%
     mutate(inf = case_when(poss_team %in% 'home' ~ home_inf,
-                           TRUE ~ away_inf)) %>%
-    rename(frame_id = frame_id_2)
+                           TRUE ~ away_inf)) 
   
   # Dont currently have poss_team in my example_play, need to resolve to get this to work
   handoff_time_positions <- handoff_time_positions %>%
@@ -537,6 +549,7 @@ make_gif <- function(example_play, inf_or_grad = 'inf'){
   # Plotting the zone influence
   inf_plot <- 
     influence_data %>% 
+    filter(frame_id <= handoff_frame + n_frames) %>%
     # Some have fractional values for some reason
     mutate(s_1 = round(s_1), s_2 = round(s_2)) %>% 
     ggplot(aes(x = s_1, y = s_2)) +
@@ -575,24 +588,27 @@ make_gif <- function(example_play, inf_or_grad = 'inf'){
              yend = c(xmin, xmax, xmax, xmin), 
              xend = c(ymax, ymax, ymin, ymin), colour = "black") + 
     ylim(xmin, xmax) +
-    #geom_point(data = example_play %>% filter(frame_id <= handoff_frame + n_frames,
-    #                                          frame_id >= handoff_frame),
-    #           aes(x=x,y=y,color=team2), size =8) +
-    geom_point(data = example_play,
+    geom_point(data = example_play %>% filter(frame_id <= handoff_frame + n_frames,
+                                              frame_id >= handoff_frame),
                aes(x=x,y=y,color=team2), size =8) +
     scale_color_manual(values = c("Def" = "lightblue", "Off" = "red", "ball" = "brown")) +
-    #geom_text(data = example_play %>% filter(frame_id <= handoff_frame + n_frames,
-    #                                         frame_id >= handoff_frame),
-    #          aes(x=x,y=y,group=nfl_id,label=jersey_number),color='black') +
-    geom_text(data = example_play,
-              aes(x=x,y=y,group=nfl_id,label=jersey_number),color='black') +
+    geom_text(data = example_play %>% filter(frame_id <= handoff_frame + n_frames,
+                                             frame_id >= handoff_frame),
+              aes(x=x,y=y,group=nfl_id,label=jersey_number),color='black')+
     theme_nothing() +
     transition_time(frame_id)  +
     ease_aes('linear') +
     NULL
-
-  play_length_ex <- length(unique(example_play$frame_id)) 
+  
+  play_length_ex <- n_frames + 1
   animate(inf_plot, fps = 10, nframe = play_length_ex)
+}
+
+is_snap <- function(pass_play){
+  # Check for plays without snaps
+  n_snap <- sum(pass_play$event %in% c("ball_snap", "snap_direct"), na.rm=TRUE)
+  
+  return(n_snap > 0)
 }
 
 # Include summer work standardization for future modeling
@@ -600,29 +616,35 @@ standardize_play <- function(pass_play, reorient = FALSE){
   
   data <- pass_play
   
+  params <- pass_play %>%
+    ungroup() %>%
+    slice(1)
+  
+  print(glue::glue("Game ID: {params$game_id}, Play ID: {params$play_id}"))
+  
   line_of_scrimmage <-
     data %>% 
     filter(event %in% c("ball_snap", "snap_direct"), team %in% c("home", "away")) %>% 
     group_by(game_id, play_id, team) %>% 
     summarise(right_scrim = max(x, na.rm=TRUE), left_scrim = min(x, na.rm=TRUE),
-              poss_team = first(poss_team)) %>%
+              poss_team = first(poss_team), .groups = "drop") %>%
     filter(team == poss_team) %>%
     select(game_id, play_id, right_scrim, left_scrim)
   
   play_direction <- data %>%
     filter(event %in% c("ball_snap", "snap_direct")) %>%
     group_by(game_id, play_id, team) %>%
-    summarise(mean_team = mean(x, na.rm=TRUE)) %>%
+    summarise(mean_team = mean(x, na.rm=TRUE), .groups = "drop") %>%
     filter(team != "ball") %>%
     filter(mean_team == max(mean_team)) %>%
     dplyr::select(game_id, play_id, direction_left = team, -mean_team)
-
+  
   possession <- plays %>%
     dplyr::select(game_id, play_id, possession_team) %>%
     left_join(games, by = "game_id") %>%
     mutate(possession_t = if_else(possession_team == home_team_abbr, "home", "away")) %>%
     dplyr::select(game_id, play_id, possession_t)
-
+  
   data <- data %>%
     left_join(play_direction, by=c("game_id", "play_id")) %>%
     left_join(line_of_scrimmage, by = c("game_id", "play_id")) %>%
@@ -906,24 +928,21 @@ air_distance <- function(pass_play, target_rec){
 
 # b) Target receiver separation
 # Probably should be done at time of pass
-separation <- function(pass_play, target_rec, start_or_end = "start"){
+separation <- function(pass_play, target_rec){
   # At time of pass arrival
   pass_play <- pass_play %>% ungroup() # Just in case
   
-  pass_event <- c("pass_forward", "pass_shovel")
-  if(start_or_end %in% "end"){
-    pass_event <- c("pass_outcome_incomplete", "pass_outcome_caught",
-                    "pass_outcome_interception", "pass_outcome_touchdown")
-  }
-  
   target_receiver_loc <- pass_play %>%
-    filter(nfl_id == target_rec, event %in% pass_event) %>%
+    filter(nfl_id == target_rec, event %in% pass_air_start) %>%
     slice(1) %>% # just in case
     select(x, y)
   
   if(dim(target_receiver_loc)[1] < 1){
     # pass arrived not in event data despite being a pass play, compromise down to diff result
-    return(NA)
+    target_receiver_loc <- pass_play %>%
+      filter(nfl_id == target_rec, frame_id == 30) %>% # in case no pass_start event
+      slice(1) %>% # just in case
+      select(x, y)
   }
   
   # Get closest defender
@@ -973,55 +992,59 @@ sideline_sep <- function(pass_play, target_rec){
 pass_rush_sep <- function(pass_play){
   # Get distance from nearest defender and the qb at time of throw
   # Possibly also grab the rate of change in that distance from 5 frames prior
-  qb_loc <- pass_play %>%
-    filter(position %in% "QB", event %in% pass_air_start) %>%
-    ungroup() %>%
-    slice(1) %>% # just in case
-    select(x, y, frame_id)
+  # qb_loc <- pass_play %>%
+  #   filter(position %in% "QB", event %in% pass_air_start) %>%
+  #   ungroup() %>%
+  #   slice(1) %>% # just in case
+  #   select(x, y, frame_id)
+  # 
+  # # Corner case for when a pass event is not recorded despite existing
+  # if(length(qb_loc$x) == 0){
+  #   # pass event wasnt recorded, approximate
+  #   if(pass_play$play_direction[1] %in% 'left'){
+  #     # new x < old x + 0.5 means pass
+  #     qb_loc <- pass_play %>%
+  #       mutate(x_change = lead(x) - x) %>%
+  #       filter(x_change > 0.5) %>% 
+  #       arrange(frame_id) %>% 
+  #       slice(1)
+  #   } else{
+  #     qb_loc <- pass_play %>%
+  #       mutate(x_change = lead(x) - x) %>%
+  #       filter(x_change < -0.5) %>% 
+  #       arrange(frame_id) %>% 
+  #       slice(1)
+  #   }
+  # }
+  # 
+  # qb_loc_5_frames <- pass_play %>%
+  #   filter(position %in% "QB", frame_id == (qb_loc$frame_id - 5)) %>%
+  #   ungroup() %>%
+  #   slice(1) %>%
+  #   select(x, y, frame_id)
+  # 
+  # def_loc <- pass_play %>%
+  #   filter(!(team %in% poss_team), team %in% c("home", "away"), event %in% pass_air_start) %>%
+  #   mutate(dist = sqrt((x - qb_loc$x)^2 + (y - qb_loc$y)^2)) %>%
+  #   ungroup() %>%
+  #   arrange(dist) %>%
+  #   slice(1) %>%
+  #   pull(dist)
+  # 
+  # def_loc_5_frames <- pass_play %>%
+  #   ungroup() %>%
+  #   filter(!(team %in% poss_team), team %in% c("home", "away"), frame_id == qb_loc_5_frames$frame_id) %>%
+  #   mutate(dist = sqrt((x - qb_loc_5_frames$x)^2 + (y - qb_loc_5_frames$y)^2)) %>%
+  #   arrange(dist) %>%
+  #   slice(1) %>%
+  #   pull(dist)
+  # 
+  # def_tot <- tibble(no_frame_rush_sep = def_loc, five_frame_rush_sep = def_loc_5_frames) %>%
+  #   mutate(roc_rush = (no_frame_rush_sep - five_frame_rush_sep) / 0.5)
+  # 
   
-  # Corner case for when a pass event is not recorded despite existing
-  if(length(qb_loc$x) == 0){
-    # pass event wasnt recorded, approximate
-    if(pass_play$play_direction[1] %in% 'left'){
-      # new x < old x + 0.5 means pass
-      qb_loc <- pass_play %>%
-        mutate(x_change = lead(x) - x) %>%
-        filter(x_change > 0.5) %>% 
-        arrange(frame_id) %>% 
-        slice(1)
-    } else{
-      qb_loc <- pass_play %>%
-        mutate(x_change = lead(x) - x) %>%
-        filter(x_change < -0.5) %>% 
-        arrange(frame_id) %>% 
-        slice(1)
-    }
-  }
-  
-  qb_loc_5_frames <- pass_play %>%
-    filter(position %in% "QB", frame_id == (qb_loc$frame_id - 5)) %>%
-    ungroup() %>%
-    slice(1) %>%
-    select(x, y, frame_id)
-  
-  def_loc <- pass_play %>%
-    filter(!(team %in% poss_team), team %in% c("home", "away"), event %in% pass_air_start) %>%
-    mutate(dist = sqrt((x - qb_loc$x)^2 + (y - qb_loc$y)^2)) %>%
-    ungroup() %>%
-    arrange(dist) %>%
-    slice(1) %>%
-    pull(dist)
-  
-  def_loc_5_frames <- pass_play %>%
-    ungroup() %>%
-    filter(!(team %in% poss_team), team %in% c("home", "away"), frame_id == qb_loc_5_frames$frame_id) %>%
-    mutate(dist = sqrt((x - qb_loc_5_frames$x)^2 + (y - qb_loc_5_frames$y)^2)) %>%
-    arrange(dist) %>%
-    slice(1) %>%
-    pull(dist)
-  
-  def_tot <- tibble(no_frame_rush_sep = def_loc, five_frame_rush_sep = def_loc_5_frames) %>%
-    mutate(roc_rush = (no_frame_rush_sep - five_frame_rush_sep) / 0.5)
+  # New data has no pass rushers, make smarter change later
+  def_tot <- NA_real_
   
   return(def_tot)
 }
@@ -1127,21 +1150,29 @@ qb_name <- function(pass_play){
 
 # g) My features now. Incorporate Openness in to the model. These results already exist
 # Be sure to use helper functions
-add_influence <- function(pass_play){
+add_influence <- function(pass_play, is_football = FALSE){
   
+  ball_name <- "ball"
+  
+  if(is_football){
+    ball_name <- "football"
+  }
   # Default is standardized = FALSE in zone inf but this data has been standardized
   # assuming that it comes from a ~standardize_play() call
   # Standardized changes only really make the plot look weird, this is an angle/velocity adj
-  this_inf <- get_zone_influence(pass_play, standardized = TRUE) %>%
+  this_inf <- get_zone_influence(pass_play, standardized = TRUE,
+                                 is_football = is_football) %>%
     mutate(x = round(s_1),
            y = round(s_2)) # sometimes get fractional values, need to correct
   
-  future_inf <- get_zone_influence(pass_play, standardized = TRUE, start_or_end = 'end') %>%
+  future_inf <- get_zone_influence(pass_play, standardized = TRUE,
+                                   start_or_end = 'end', is_football = is_football) %>%
     mutate(x = round(s_1),
            y = round(s_2))
   
   # Summarize into some variables
   # Amount of cells owned in a 5x5 circle around location ball will land
+  # This just gets the frame_id, doesnt actually calculate at that pt
   pass_arrival_frame <- pass_play %>%
     filter(event %in% c(pass_air_end, 'pass_arrived')) %>%
     ungroup() %>%
@@ -1150,7 +1181,7 @@ add_influence <- function(pass_play){
     pull(frame_id) # Just need one frame for an arrival event
   
   ball_at_arrival <- pass_play %>%
-    filter(frame_id == pass_arrival_frame, team %in% "football") %>%
+    filter(frame_id == pass_arrival_frame, team %in% ball_name) %>%
     ungroup() %>%
     slice(1) %>%
     mutate(x = if_else(x < 0, 0, x),
@@ -1175,6 +1206,7 @@ add_influence <- function(pass_play){
       future_inf <- future_inf %>% mutate(off_inf = away_inf)
     }
     
+    # At time of throw
     pass_time_results <- this_inf %>%
       ungroup() %>%
       mutate(dist_from_ball = sqrt((x - ball_at_arrival$x)^2 + (y - ball_at_arrival$y)^2)) %>%
@@ -1189,6 +1221,7 @@ add_influence <- function(pass_play){
       print('Failing for some reason')
     }
     
+    # At time of arrival
     pass_arrival_results <- future_inf %>%
       ungroup() %>%
       mutate(dist_from_ball = sqrt((x - ball_at_arrival$x)^2 + (y - ball_at_arrival$y)^2)) %>%
@@ -1206,7 +1239,12 @@ add_influence <- function(pass_play){
 
 
 # h) velocity of ball at pass_arrival
-ball_speed_at_arrival <- function(pass_play){
+ball_speed_at_arrival <- function(pass_play, is_football = FALSE){
+  
+  football_name <- "ball"
+  if(is_football){
+    football_name <- "football"
+  }
   
   pass_arrival_frame <- pass_play %>%
     filter(event %in% c(pass_air_end, 'pass_arrived')) %>%
@@ -1216,7 +1254,7 @@ ball_speed_at_arrival <- function(pass_play){
     pull(frame_id) # Just need one frame for an arrival event
   
   ball_at_arrival <- pass_play %>%
-    filter(frame_id == pass_arrival_frame, team %in% "football") %>%
+    filter(frame_id == pass_arrival_frame, team %in% football_name) %>%
     ungroup() %>%
     slice(1) %>%
     pull(velocity)
@@ -1246,7 +1284,14 @@ air_time <- function(pass_play){
 
 # Previously used y but field length is measured by x, clearly meant to use that variable
 # j) Air yards (just the x component)
-air_yards <- function(pass_play){
+air_yards <- function(pass_play, is_football = FALSE){
+  
+  # Check for new football naming
+  football_name <- "ball"
+  if(is_football){
+    football_name <- "football"
+  }
+  
   throw_frame <- pass_play %>%
     ungroup() %>%
     filter(event %in% pass_air_start) %>%
@@ -1260,7 +1305,7 @@ air_yards <- function(pass_play){
     pull(frame_id)
   
   ball_position <- pass_play %>%
-    filter(team %in% "football", frame_id %in% c(throw_frame, arrival_frame)) %>%
+    filter(team %in% football_name, frame_id %in% c(throw_frame, arrival_frame)) %>%
     summarize(dist = abs(first(x) - last(x))) %>%
     pull(dist)
   
@@ -1269,7 +1314,7 @@ air_yards <- function(pass_play){
 
 # Other ancilliary functions
 # This is breaking for something in game # 23
-intended_receiver <- function(pass_play){
+intended_receiver <- function(pass_play, is_football = FALSE){
   # Using pass_over events, identify player closest to the ball on offense, label intended receiver
   
   pass_play <- pass_play %>% ungroup() 
@@ -1305,15 +1350,24 @@ intended_receiver <- function(pass_play){
   }
   
   # Grab ball location, may need to investigate data integrity on this one
-  ball_loc <- pass_play %>%
-    filter(team %in% "football", frame_id == arrival_frame) %>%
-    select(x, y)
+  if(!is_football){
+    # Again old tracking data calls it ball
+    ball_loc <- pass_play %>%
+      filter(team %in% "ball", frame_id == arrival_frame) %>%
+      select(x, y)
+  } else{
+    # New tracking data calls it football
+    ball_loc <- pass_play %>%
+      filter(team %in% "football", frame_id == arrival_frame) %>%
+      select(x, y)
+  }
+  
   
   if(length(ball_loc$x) == 0){
     # Ball isnt measured at time of arrival for some reason, remove these plays
     return(NA_real_)
   }
-
+  
   # Closest to ball should reasonably be the receiver, can alternatively scrape names from text
   receiver <- pass_play %>%
     filter(position %in% c("WR", "RB", "TE"), frame_id == arrival_frame) %>%
@@ -1322,6 +1376,9 @@ intended_receiver <- function(pass_play){
     slice(1) %>%
     pull(nfl_id)
   
+  if(length(receiver) == 0){
+    return(NA_real_)
+  }
   return(receiver)
 }
 
@@ -1361,7 +1418,7 @@ ball_fix <- function(pass_play){
   
   # Ball stuff
   ball <- pass_play %>%
-    filter(team %in% "football") %>%
+    filter(team %in% c('ball', 'football')) %>%
     mutate(delta_x = x - lag(x, default = 9999))
   
   # No Ball stuff
@@ -1415,7 +1472,7 @@ ball_fix <- function(pass_play){
       
       # only do it if the difference is big enough
       pass_play <- pass_play %>%
-        mutate(frame_id = case_when(team %in% "football" ~ frame_id - difference,
+        mutate(frame_id = case_when(team %in% c('ball', 'football') ~ frame_id - difference,
                                     TRUE ~ frame_id)) %>%
         dplyr::filter(frame_id >= 1)
     }
@@ -1440,7 +1497,7 @@ ball_fix_2 <- function(pass_play){
   
   start_frame_ball <- pass_play %>%
     ungroup() %>%
-    filter(team %in% c('ball')) %>%
+    filter(team %in% c('ball', 'football')) %>%
     filter(velocity > 0.85) %>%
     slice(1) %>%
     pull(frame_id)
@@ -1461,7 +1518,8 @@ ball_fix_2 <- function(pass_play){
       slice(1)
     
     pass_play <- pass_play %>%
-      mutate(frame_id = if_else(team %in% "football", frame_id - difference, frame_id)) %>%
+      mutate(frame_id = if_else(team %in% c('ball', 'football'),
+                                frame_id - difference, frame_id)) %>%
       filter(frame_id >0)
   }
   return(pass_play)
@@ -1477,12 +1535,23 @@ quick_nest_fix <- function(data, game_id, play_id){
 }
 
 # Some of the observations have no ball data, remove these
-handle_no_ball <- function(data){
-  if(!any(data$team %in% "football")){
-    return(NA_real_)
+handle_no_ball <- function(data, is_football = FALSE){
+  if(!is_football){
+    # Old tracking data calls the football "ball"
+    if(!any(data$team %in% 'football')){
+      return(NA_real_)
+    } else{
+      return(1)
+    }
   } else{
-    return(1)
+    # New tracking data calls the football "football"
+    if(!any(data$team %in% 'football')){
+      return(NA_real_)
+    } else{
+      return(1)
+    }
   }
+  
 }
 
 pass_start_event <- function(data){
@@ -1524,7 +1593,7 @@ all_rec_air_yards_if_caught <- function(one_frame, ball_speed = 20, run = FALSE)
 # Now to adjust the function that I use to estimate EP currently
 ep_for_receivers_exact <- function(all_frames_with_pbp, game_id_par, play_id_par,
                                    yardline_100, ydstogo, down){
-
+  
   # Relies on global dependency
   play_params <- ep_requirements %>%
     filter(game_id == game_id_par, play_id == play_id_par) 
@@ -1649,11 +1718,13 @@ first_elig_frame <- function(pass_play){
   # Grab the frame id for the first data point I want to consider
   frame <- pass_play %>%
     group_by(frame_id) %>%
-    summarize(n_ball_snap = sum(event %in% c('ball_snap', 'direct_snap'), na.rm = TRUE)) %>%
+    summarize(n_ball_snap = sum(event %in% c('ball_snap', 'direct_snap'), na.rm = TRUE),
+              .groups = "drop") %>%
     arrange(desc(n_ball_snap)) %>%
     slice(1) %>%
     ungroup() %>%
-    mutate(frame_id = if_else(n_ball_snap > 1, frame_id, 15L)) %>% # Change to arbitrary frame if we have a ball snap problem
+    mutate(frame_id = if_else(n_ball_snap > 1,
+                              as.integer(frame_id), 15L)) %>% # Change to arbitrary frame if we have a ball snap problem
     pull(frame_id)
   
   return(frame)
@@ -1662,7 +1733,15 @@ first_elig_frame <- function(pass_play){
 last_elig_frame <- function(pass_play, pass_type = 'C'){
   # Set default to be 'C' for legacy code
   
-  last_event <- c('pass_forward', 'pass_shovel')
+  #last_event <- c('pass_forward', 'pass_shovel')
+  last_event <- c(# "pass_arrived",
+    "pass_outcome_caught",
+    "pass_outcome_incomplete",
+    # "pass_tipped",
+    "touchdown",
+    "pass_outcome_interception",
+    "pass_outcome_touchdown"
+  )
   if(pass_type %in% c('S', 'R')){
     last_event <- c('run', 'tackle', 'first_contact', 'out_of_bounds',
                     'qb_sack', 'qb_strip_sack')
@@ -1670,11 +1749,13 @@ last_elig_frame <- function(pass_play, pass_type = 'C'){
   
   frame <- pass_play %>%
     group_by(frame_id) %>%
-    summarize(n_ball_released = sum(event %in% last_event, na.rm = TRUE)) %>%
+    summarize(n_ball_released = sum(event %in% last_event, na.rm = TRUE),
+              .groups = "drop") %>%
     arrange(desc(n_ball_released)) %>%
     slice(1) %>%
     ungroup() %>%
-    mutate(frame_id = if_else(n_ball_released > 1, frame_id, 30L)) %>% # Change to arbitrary frame if we have a ball snap problem
+    mutate(frame_id = if_else(n_ball_released > 1,
+                              as.integer(frame_id), 30L)) %>% # Change to arbitrary frame if we have a ball snap problem
     pull(frame_id)
   
   # Check if 10 frames after is available
@@ -1698,25 +1779,17 @@ qb_tuck <- function(sack_or_run){
   return(qb_id)
 }
 
-########
-# New functions for BDB 3
-########
-
-# No nflscrapr allowed, just string parse
-quick_str_parse <- function(play_desc, pass_result){
+get_possession_team <- function(one_or_more_plays){
   
-  to_parse <- str_extract_all(play_desc, "[A-Z]\\.[A-z\\'\\-]+")
-  if(pass_result %in% "IN" & str_detect(play_desc, "intended")){
-    # Need to verify there is an intended, otherwise NA
-    return(to_parse[[1]][2])
-  }
-  if(pass_result %in% c("C", "I") & length(to_parse[[1]]) >= 2){
-    return(to_parse[[1]][2])
-  }
-  return(NA_character_)
+  poss_team <- one_or_more_plays %>%
+    group_by(game_id, play_id) %>%
+    filter(position %in% c("QB","RB")) %>%
+    slice(1) %>%
+    select(game_id, play_id, poss_team = team)
+  
+  return(poss_team)
 }
 
-# Used to calculated all eligible receivers' nearest defenders
 calc_nearest_d_per_frame <- function(pass_play){
   
   check <- pass_play %>%
@@ -1737,7 +1810,7 @@ calc_nearest_d_per_frame <- function(pass_play){
     pivot_wider(names_from = is_poss_team, values_from = data) %>%
     unnest(off, names_sep = "_") %>%
     unnest(def, names_sep = "_") 
-
+  
   pass_play_nest <- pass_play_nest %>%
     mutate(dist_to_player = sqrt((off_x - def_x) ^ 2 + (off_y - def_y) ^ 2)) %>%
     group_by( frame_id, off_nfl_id) %>%
@@ -1750,4 +1823,378 @@ calc_nearest_d_per_frame <- function(pass_play){
            separation = dist_to_player)
   
   return(pass_play_nest)
+}
+
+# Receiver separation from nearest sideline
+all_sideline_sep <- function(one_frame, run=FALSE){
+  
+  position_group <- c('WR', 'TE', 'RB')
+  if(run){
+    position_group <- c('WR', 'TE', 'RB', 'QB')
+  }
+  
+  sideline_df <- one_frame %>%
+    filter(position %in% position_group) %>%
+    dplyr::select(nfl_id, display_name, x, y) %>%
+    rowwise() %>%
+    mutate(dist_top = y,
+           dist_bot = 53 - y,
+           sideline_sep = min(dist_top, dist_bot)) %>%
+    dplyr::select(nfl_id, display_name, sideline_sep)
+  
+  return(sideline_df)
+}
+
+# Expected Max Yards Calculation
+# Doing in a separate file from QB Evaluation as that file is already getting terribly cumbersome
+flog.appender(appender.file('logs/all_time_points_decisions.log'), 'all_time')
+flog.info('Start of all_time_points_decisions.R. Computing relevant covariates for all pass frames in 
+          the first 6 weeks of the 2017-2018 NFL season.', name = 'all_time')
+
+# Now I will need to calculate the zone of influence at each frame in the range of first to last elig frames
+# At each frame of influence, I will need to find the covariates associated with each receiver
+# Reminder of the covariates:
+
+# a) covariates specifically relating to measurements achievable with values from throw_frame
+# 'rec_separation', 'sideline_sep', 'no_frame_rush_sep',
+# 'avg_speed', 'time_to_throw', 'dist_from_pocket', 
+
+# b) covariates that are measured at throw_frame but require info wrt ball arrival frame (ball x,y, time)
+# 'n_cells_at_throw', 'own_intensity_at_throw', 'own_avg_intensity_at_throw',
+# 'air_yards_y', 'air_time_ball', 'air_dist'
+
+# I'll do a function for each to avoid the infamous omnibus function
+# Each function will need subfunctions I imagine
+# Work on structure later
+
+# Looks good for new data
+# Receiver separation from nearest defender
+all_separation <- function(one_frame, run=FALSE){
+  # Receiver separation
+  
+  position_group <- c('WR', 'TE', 'RB', 'FB', 'HB')
+  if(run){
+    position_group <- c('WR', 'TE', 'RB', 'QB', 'FB', 'HB')
+  }
+  
+  receivers_df <- one_frame %>%
+    filter(position %in% position_group) %>%
+    dplyr::select(nfl_id, display_name, x, y)
+  
+  def_df <- one_frame %>%
+    filter(team != poss_team)
+  
+  dist_vec <- c()
+  for(i in 1:dim(receivers_df)[1]){
+    close <- def_df %>% 
+      mutate(rec_x = receivers_df$x[i],
+             rec_y = receivers_df$y[i],
+             dist_rec = sqrt((x - rec_x)^2 + (y - rec_y)^2)) %>%
+      arrange(dist_rec) %>%
+      slice(1) %>%
+      pull(dist_rec)
+    
+    dist_vec <- c(dist_vec, close)
+  }
+  
+  receivers_df <- receivers_df %>%
+    mutate(rec_separation = dist_vec) # Should be equal lengths
+  
+  return(receivers_df)
+}
+
+# Add with left_join
+
+# Looks good for new data
+# Receiver separation from nearest sideline
+all_sideline_sep <- function(one_frame, run=FALSE){
+  
+  position_group <- c('WR', 'TE', 'RB', 'HB', 'FB')
+  if(run){
+    position_group <- c('WR', 'TE', 'RB', 'QB', 'HB', 'FB')
+  }
+  
+  sideline_df <- one_frame %>%
+    filter(position %in% position_group) %>%
+    dplyr::select(nfl_id, display_name, x, y) %>%
+    rowwise() %>%
+    mutate(dist_top = y,
+           dist_bot = 53 - y,
+           sideline_sep = min(dist_top, dist_bot)) %>%
+    dplyr::select(nfl_id, display_name, sideline_sep)
+  
+  return(sideline_df)
+}
+
+# Add with left_join
+
+# Unnecessary, return NA just for ease of use
+# No frame rush separation
+pass_rush_sep <- function(one_frame){
+  
+  # # Get distance from nearest defender and the qb at time of throw
+  # qb_loc <- one_frame %>%
+  #   filter(position %in% "QB") %>%
+  #   dplyr::select(x, y, frame_id)
+  # 
+  # def_dist <- one_frame %>%
+  #   filter(!(team %in% poss_team), team %in% c("home", "away")) %>%
+  #   mutate(dist = sqrt((x - qb_loc$x)^2 + (y - qb_loc$y)^2)) %>%
+  #   ungroup() %>%
+  #   arrange(dist) %>%
+  #   slice(1) %>%
+  #   pull(dist)
+  
+  def_dist <- NA_real_
+  
+  return(def_dist)
+}
+
+# Add with mutate
+
+# Looks good for new approach
+# QB speed at frame
+avg_qb_speed <- function(one_frame){
+  
+  # Damn you Sean Payton, we dont need Taysom Hill on the field with Brees
+  qb_speed <- one_frame %>% 
+    filter(position %in% 'QB') %>%
+    slice(1)
+  
+  if(dim(qb_speed)[1] >= 2){
+    print(one_frame)
+  }
+  if(!("velocity" %in% names(one_frame))){
+    return(qb_speed %>% pull(s))
+  }
+  
+  return(qb_speed %>% pull(velocity))
+  
+}
+
+# Add with mutate
+
+# This should be fine for new data assuming first_elig works
+# Time since ball snap
+time_calc <- function(one_frame, first_elig_frame_res){
+  time_from_snap <- one_frame %>%
+    slice(1) %>%
+    mutate(time_to_throw = (frame_id - first_elig_frame_res) / 10) %>%
+    pull(time_to_throw)
+  
+  return(time_from_snap)
+}
+
+# So that is all the simple covariates, time to make a small omnibus function that adds them to all frames
+simple_covariates <- function(pass_play, first_elig, last_elig, run = FALSE){
+  # Lets see how far I have come: no for loops
+  
+  valid_pass_part <- pass_play %>% 
+    filter(dplyr::between(frame_id, first_elig, last_elig)) %>%
+    mutate(frame_id_2 = frame_id) %>% # quick fix to deal with nesting, dont want to lose covariate
+    ungroup() %>%
+    nest(-frame_id_2) %>%
+    mutate(rec_sep = map(data, ~ all_separation(., run = run)), # This just gets covariates for QB
+           sideline_sep = map(data, ~all_sideline_sep(., run = run)),
+           rush_sep = map_dbl(data, ~pass_rush_sep(.)),
+           qb_speed = map_dbl(data, ~avg_qb_speed(.)),
+           time_throw = map2_dbl(data, first_elig, ~time_calc(.x, .y))) %>% # pocket() defined in thesis_helpers
+    dplyr::select(-data)
+  
+  return(valid_pass_part)
+}
+
+# Okay good, now the actual functions
+ownership_at_throw <- function(one_frame, influence,
+                               ball_speed = 20, run = FALSE,
+                               ball_coords = NA){
+  # Ball speed is set at 20 yards per second as an exploratory measure, used as argument to be tailored
+  #tictoc::tic()
+  # QB position for my calculations
+  qb_loc <- one_frame %>%
+    filter(position %in% 'QB') %>%
+    slice(1)
+  
+  position_group <- c('WR', 'TE', 'RB', 'HB', 'FB')
+  if(run){
+    position_group <- c('WR', 'TE', 'RB', 'QB', 'HB', 'FB')
+  }
+  # Receiver locations and anticipated locations
+  receiver_loc <- one_frame %>%
+    filter(position %in% position_group) %>%
+    mutate(dist_to_qb = sqrt((x - qb_loc$x) ^ 2 + (y - qb_loc$y)^2), 
+           speed_diff = ball_speed - velocity,
+           time_to_arrival = dist_to_qb / speed_diff,
+           speed_x = velocity * cos(dir * pi / 180),
+           arrival_x = time_to_arrival * speed_x + x,
+           arrival_x = case_when(arrival_x < 0 ~ 0,
+                                 arrival_x > 120 ~ 120,
+                                 TRUE ~ arrival_x),
+           air_yards_x = abs(arrival_x - qb_loc$x),
+           speed_y = velocity * sin(dir * pi / 180),
+           arrival_y = time_to_arrival * speed_y + y,
+           arrival_y = case_when(arrival_y < 0 ~ 0,
+                                 arrival_y > 53 ~ 53,
+                                 TRUE ~ arrival_y),
+           air_dist = sqrt((arrival_x - qb_loc$x) ^ 2 + (arrival_y - qb_loc$y) ^ 2))
+  
+  sub_fn <- function(one_frame, proj_x, proj_y, influence){
+    
+    influence <- influence %>%
+      mutate(x = round(s_1),
+             y = round(s_2))
+    
+    if(one_frame$poss_team[1] %in% 'home'){
+      influence <- influence %>% mutate(off_inf = home_inf)
+    } else{
+      influence <- influence %>% mutate(off_inf = away_inf)
+    }
+    
+    pass_time_results <- influence %>%
+      ungroup() %>%
+      mutate(dist_from_ball = sqrt((x - proj_x)^2 + (y - proj_y)^2)) %>%
+      filter(dist_from_ball <= 5) %>%
+      summarize(n_close = n(),
+                n_cells_at_throw = sum(off_inf > 0.5),
+                own_intensity_at_throw = sum(off_inf),
+                own_avg_intensity_at_throw = if_else(is.na(mean(off_inf)), 0, mean(off_inf)))
+    
+    return(pass_time_results)
+  }
+  
+  if(!is.na(ball_coords)){
+    ball_centric_output <- list(sub_fn(one_frame, ball_coords$x, ball_coords$y, influence))
+  } else{
+    ball_centric_output <- list(NA)
+  }
+  #tictoc::toc()
+  
+  #tictoc::tic()
+  receiver_ownership_proj <- receiver_loc %>%
+    mutate(player_centric = map2(arrival_x, arrival_y, ~sub_fn(one_frame, .x, .y, influence)),
+           ball_centric= ball_centric_output) %>%
+    dplyr::select(nfl_id, display_name, air_time_ball = time_to_arrival,
+                  air_yards_x, air_dist, player_centric, ball_centric) %>%
+    unnest(cols = c(player_centric, ball_centric), names_sep = "_")
+  #tictoc::toc()
+  
+  return(receiver_ownership_proj)
+}
+
+pass_arrive_location <- function(pass_play){
+  ball_coords <- pass_play %>%
+    arrange(desc(frame_id)) %>%
+    filter(team %in% "football") %>%
+    slice(1) %>%
+    select(x, y)
+  
+  return(ball_coords)
+}
+
+# So my 2 main functions rely on different levels of nesting
+# The simple covariates are done at a play level while the ownership covariates are done framewise
+# Try to write a wrapper for the ownership covariates that allows for play level summary
+
+# I think I want to keep frame_inf and ownership_metrics
+ownership_metric_wrapper <- function(pass_play, first_elig, last_elig, is_football = FALSE){
+  
+  pass_play <- pass_play %>%
+    filter(dplyr::between(frame_id, first_elig, last_elig)) %>%
+    mutate(frame_id_2 = frame_id)
+  
+  tictoc::tic()
+  pass_play <- pass_play %>% # quick fix to deal with nesting, dont want to lose covariate
+    nest(-frame_id_2) %>%
+    mutate(ball_at_arrival_coords = map(data, pass_arrive_location),
+           frame_inf = map(data, ~get_zone_influence(., lazy = TRUE,
+                                                     is_football = is_football)))
+  tictoc::toc()
+  
+  tictoc::tic()
+  pass_play <- pass_play %>%
+    mutate(ownership_metrics = pmap(list(data, frame_inf, ball_at_arrival_coords),
+                                    ~ownership_at_throw(..1, ..2, 
+                                                        ball_speed = 20, run =TRUE,
+                                                        ball_coords = ..3))) %>%
+    dplyr::select(-data, -frame_inf)
+  tictoc::toc()
+  
+  return(pass_play)
+}
+
+
+joiner_fn <- function(basic_cov, complex_cov){
+  rec_sep <- basic_cov %>% # Fix joiner function for the new pocket_dist function location
+    dplyr::select(frame_id_2, no_frame_rush_sep = rush_sep, qb_vel = qb_speed,
+                  time_to_throw = time_throw, pocket_dist, rec_separation = rec_sep) %>%
+    unnest(rec_separation)
+  
+  sideline_sep <- basic_cov %>%
+    dplyr::select(frame_id_2, sideline_sep) %>%
+    unnest(sideline_sep)
+  
+  owner_met <- complex_cov %>%
+    dplyr::select(frame_id_2, ownership_metrics) %>%
+    unnest(ownership_metrics)
+  
+  all_together <- rec_sep %>%
+    left_join(sideline_sep, by = c('frame_id_2', 'nfl_id', 'display_name')) %>%
+    left_join(owner_met, by = c('frame_id_2', 'nfl_id', 'display_name'))
+  
+  return(all_together)
+}
+
+
+additional_basic_covariates <- function(one_frame,
+                                        ball_speed = 20, run = FALSE,
+                                        ball_coords = NA){
+  
+  qb_loc <- one_frame %>%
+    filter(position %in% 'QB') %>%
+    slice(1)
+  
+  position_group <- c('WR', 'TE', 'RB', 'HB', 'FB')
+  if(run){
+    position_group <- c('WR', 'TE', 'RB', 'QB', 'HB', 'FB')
+  }
+  # Receiver locations and anticipated locations
+  receiver_loc <- one_frame %>%
+    filter(position %in% position_group) %>%
+    select(nfl_id, frame_id, dir, velocity, x, y) %>%
+    mutate(dist_to_qb = sqrt((x - qb_loc$x) ^ 2 + (y - qb_loc$y)^2), 
+           speed_diff = ball_speed - velocity,
+           time_to_arrival = dist_to_qb / speed_diff,
+           speed_x = velocity * cos(dir * pi / 180),
+           arrival_x = time_to_arrival * speed_x + x,
+           arrival_x = case_when(arrival_x < 0 ~ 0,
+                                 arrival_x > 120 ~ 120,
+                                 TRUE ~ arrival_x),
+           air_yards_x = abs(arrival_x - qb_loc$x),
+           speed_y = velocity * sin(dir * pi / 180),
+           arrival_y = time_to_arrival * speed_y + y,
+           arrival_y = case_when(arrival_y < 0 ~ 0,
+                                 arrival_y > 53 ~ 53,
+                                 TRUE ~ arrival_y),
+           air_dist = sqrt((arrival_x - qb_loc$x) ^ 2 + (arrival_y - qb_loc$y) ^ 2))
+  return(receiver_loc)
+}
+
+additional_basic_covariates_wrapper <- function(pass_play, first_elig, last_elig, is_football = FALSE){
+  
+  pass_play <- pass_play %>%
+    filter(dplyr::between(frame_id, first_elig, last_elig)) %>%
+    mutate(frame_id_2 = frame_id)
+  
+  tictoc::tic()
+  pass_play <- pass_play %>% # quick fix to deal with nesting, dont want to lose covariate
+    nest(-frame_id_2) %>%
+    mutate(ball_at_arrival_coords = map(data, pass_arrive_location),
+           additional_metrics =map2(data, ball_at_arrival_coords,
+                                    ~additional_basic_covariates(.x, 
+                                                                 ball_speed = 20, run =TRUE,
+                                                                 ball_coords = .y))) %>%
+    dplyr::select(-data)
+  tictoc::toc()
+  
+  return(pass_play)
 }

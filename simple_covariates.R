@@ -12,22 +12,12 @@ flog.info('Start of simple_covariates.R. This will establish the
            to the observed passes and then just expand over observed set.', name = 'par_obs')
 
 
-default_path <- "Data_new/"
+default_path <- "Data/"
 select_cols <- c("time", "x", "y", "s",
                  "dis", "dir", "event",
                  "nflId", "displayName", "jerseyNumber",
                  "team", "frameId", "gameId", "playId")
-file_list <- list.files(default_path, pattern = "week[0-9]+.csv")
 
-all_data_set <- tibble()
-for(i in 1:length(file_list)){
-  new_data <- read_csv(paste0(default_path, file_list[i])) %>%
-    select_at(select_cols) %>%
-    janitor::clean_names()
-  
-  all_data_set <- all_data_set %>%
-    bind_rows(new_data)
-}
 
 # Load the games, players, and list of plays in the data set
 games <- read_csv(paste0(default_path, "games.csv"), col_types = cols()) %>%
@@ -55,7 +45,10 @@ reorient <- FALSE
 # Also need the play_ids which are the plays that had passes
 play_ids <- plays %>%
   filter(!is.na(pass_result)) %>% 
-  select(game_id, play_id, pass_result)
+  mutate(yardline_100 = case_when(possession_team == yardline_side ~ 100 - yardline_number,
+                                  possession_team != yardline_side ~ yardline_number)) %>%
+  select(game_id, play_id, pass_result,
+         down, yards_to_go, yardline_100)
 
 # Generic event labels
 pass_air_end <- 
@@ -85,99 +78,99 @@ flog.info('Cluster prepared, running loop.', name = 'par_obs')
 
 #  # # # # #  The replacement for the loop # # #  # # # # # # 
 
-# I dont think I need display_name here, looks like its in tracking data
-tracking <- all_data_set %>%
-  left_join(players %>% select(-display_name), by = "nfl_id") %>%
-  rename(velocity = s)
+for(i in 2:17){
+  
+  this_week <-  read_csv(paste0(default_path, "week", i, ".csv")) %>%
+    select_at(select_cols) %>%
+    janitor::clean_names()
+  
+  # I dont think I need display_name here, looks like its in tracking data
+  tracking <- this_week %>%
+    left_join(players %>% select(-display_name), by = "nfl_id") %>%
+    rename(velocity = s)
+  
+  # Need possession team for current format
+  possession <- get_possession_team(tracking)
+  
+  # Fix nesting that doesnt have a few variables at lower level
+  tracking_nest <- tracking %>%
+    left_join(possession) %>%
+    nest(-game_id, -play_id) %>%
+    inner_join(play_ids) %>%
+    mutate(data = pmap(list(data, game_id, play_id), ~quick_nest_fix(..1, ..2, ..3)))
+  
+  # Remove plays with no snap recorded
+  tracking_rm_no_snaps <- tracking_nest %>%
+    mutate(snapped = map_lgl(data, is_snap)) %>%
+    filter(snapped) %>%
+    select(-snapped)
+  
+  tracking_standard <- tracking_rm_no_snaps %>%
+    mutate(data = map(data, ~standardize_play(., reorient)),
+           cleaning = map_dbl(data,
+                              ~handle_no_ball(., is_football = TRUE))) %>%
+    filter(!is.na(cleaning), pass_result %in% c('C', 'I', 'IN')) 
+  
+  # Error on 5996th object
+  # Result 5996 must be a single double, not a double vector of length 0
+  # Input `target` is `map_dbl(data, intended_receiver, is_football = new_age_tracking_data)
+  # Fixed, problem was a play had no WR / TE / RB to be the target
+  tracking_filter <- tracking_standard %>%
+    mutate(data = map(data, ball_fix_2),
+           target = map_dbl(data, intended_receiver, is_football = TRUE),
+           complete = map_lgl(data, play_success),
+           fake_pt = map_dbl(data, fake_punt),
+           qb_check = map_dbl(data, no_qb),
+           pass_recorded = map_lgl(data, ~pass_start_event(.))) %>%
+    left_join(players %>% select(nfl_id, display_name), by = c("target" = "nfl_id")) %>%
+    filter(!is.na(target), !is.na(fake_pt), !is.na(qb_check), pass_recorded) %>%
+    mutate(receiver = display_name) %>%
+    select(-display_name)
+  
+  tracking_exempt <- tracking_filter %>%
+    anti_join(exempt_plays) %>%
+    filter(!(game_id == 2017092407))
+  
+  parallel_res_setup <- tracking_exempt %>%
+    mutate(first_elig = map_int(data, ~first_elig_frame(.)),
+           last_elig = map_int(data, ~last_elig_frame(.)) + 0, # previously epsilon
+           pocket_dist = pmap(list(data, first_elig, last_elig),
+                              ~pocket_fixed(..1, ..2, ..3)))
+  
+  parallel_res <- parallel_res_setup %>%
+    mutate(basic_covariates = future_pmap(list(data, first_elig, last_elig),
+                                   ~ simple_covariates(..1, ..2, ..3, run = TRUE)),
+           basic_covariates = map2(basic_covariates, pocket_dist,
+                                   ~ .x %>% mutate(pocket_dist = list(.y)))) %>%
+    dplyr::select(-pocket_dist) # remove from exterior, now mapped it back
+  
+  
+  parallel_res_temp <- parallel_res %>%
+    mutate(additional_basic_covariates = future_pmap(list(data, first_elig, last_elig),
+                                                     ~ additional_basic_covariates_wrapper(..1, ..2, ..3,
+                                                                                           is_football = TRUE)))
+  
+  
+  parallel_res_joined <- parallel_res_temp %>%
+    mutate(all_basic_covariates = map2(basic_covariates, additional_basic_covariates,
+                                       ~ .x %>% left_join(.y, by = "frame_id_2"))) %>%
+    select(game_id, play_id, pass_result, target, complete,
+           first_elig, last_elig, all_basic_covariates) %>%
+    unnest(all_basic_covariates) %>%
+    mutate(joined_all_basic_covariates = pmap(list(rec_sep, sideline_sep, additional_metrics),
+                                              ~ ..1 %>% 
+                                                select(-c(x, y)) %>% # in sideline_sep
+                                                left_join(..2, by = c( "nfl_id", "display_name")) %>%
+                                                left_join(..3, by = c( "nfl_id")))) %>%
+    select(-c(rec_sep, sideline_sep, additional_metrics)) %>%
+    unnest(joined_all_basic_covariates)
+  
+  flog.info('Ended iteration %s at time %s.', i, format(Sys.time(), '%X'), name = 'all_time')
+  flog.info('Writing to all_frames_covariates_week%s.rds', i, name = 'all_time')
+  
+  parallel_res_joined %>%
+    saveRDS(paste0(default_path, "all_frames_covariates_week", i, ".rds"))
+  
+}
 
-# Need possession team for current format
-tictoc::tic()
-possession <- get_possession_team(tracking)
-
-# Fix nesting that doesnt have a few variables at lower level
-tracking_nest <- tracking %>%
-  left_join(possession) %>%
-  nest(-game_id, -play_id) %>%
-  inner_join(play_ids) %>%
-  mutate(data = pmap(list(data, game_id, play_id), ~quick_nest_fix(..1, ..2, ..3)))
-
-# Remove plays with no snap recorded
-tracking_rm_no_snaps <- tracking_nest %>%
-  mutate(snapped = map_lgl(data, is_snap)) %>%
-  filter(snapped) %>%
-  select(-snapped)
-
-tracking_standard <- tracking_rm_no_snaps %>%
-  mutate(data = map(data, ~standardize_play(., reorient)),
-         cleaning = map_dbl(data,
-                            ~handle_no_ball(., is_football = new_age_tracking_data))) %>%
-  filter(!is.na(cleaning), pass_result %in% c('C', 'I', 'IN')) 
-
-# Error on 5996th object
-# Result 5996 must be a single double, not a double vector of length 0
-# Input `target` is `map_dbl(data, intended_receiver, is_football = new_age_tracking_data)
-# Fixed, problem was a play had no WR / TE / RB to be the target
-tracking_filter <- tracking_standard %>%
-  mutate(data = map(data, ball_fix_2),
-         target = map_dbl(data, intended_receiver, is_football = TRUE),
-         complete = map_lgl(data, play_success),
-         fake_pt = map_dbl(data, fake_punt),
-         qb_check = map_dbl(data, no_qb),
-         pass_recorded = map_lgl(data, ~pass_start_event(.))) %>%
-  left_join(players %>% select(nfl_id, display_name), by = c("target" = "nfl_id")) %>%
-  filter(!is.na(target), !is.na(fake_pt), !is.na(qb_check), pass_recorded) %>%
-  mutate(receiver = display_name) %>%
-  select(-display_name)
-
-tracking_exempt <- tracking_filter %>%
-  anti_join(exempt_plays) %>%
-  filter(!(game_id == 2017092407))
-
-# All the parallel stuff
-parallel_res <- tracking_exempt %>%
-  ungroup() %>% 
-  mutate(air_dist = map2_dbl(data, target, ~air_distance(.x, .y)),
-         separation = map2(data, target, ~separation(.x, .y)),
-         sideline_sep = map2_dbl(data, target, ~sideline_sep(.x, .y)),
-         passrush_sep = map(data, ~pass_rush_sep(.))) 
-
-parallel_res_scalar <- parallel_res %>%
-  mutate(qb_vel = map_dbl(data, ~qb_speed(.)),
-         first_elig = map_dbl(data, ~first_elig_frame(.)),
-         last_elig = map_dbl(data, ~last_elig_frame(.))) %>%
-  mutate(time_to_throw = map_dbl(data, ~release_time(.)),
-         dist_from_pocket = map_dbl(data, ~pocket(.)),
-         qb_disp_name = map_chr(data, ~qb_name(.)))
-
-# Add influence to the play
-# Hit a writing to connection error, try with sequential to avoid
-# Had to remove future_map altogether due to memory error on globals
-plan(sequential)
-parallel_res_inf <- parallel_res_scalar %>%
-  mutate(inf_at_pass = map(data,
-                           ~ add_influence(., is_football = new_age_tracking_data)))
-
-# A few extra covariates and unnesting
-parallel_res_unnest <- parallel_res_inf %>%
-  mutate(ball_speed_arrival = map_dbl(data,
-                                      ~ball_speed_at_arrival(.,
-                                                             is_football = new_age_tracking_data)),
-         air_time_ball = map_dbl(data, ~air_time(.)),
-         air_yards_x = map_dbl(data, ~air_yards(.,
-                                                is_football = new_age_tracking_data))) %>%
-  dplyr::select(-data) %>%
-  unnest(separation) %>%
-  unnest(passrush_sep) %>%
-  unnest(inf_at_pass)
-
-# Save the data to a permanent location as to not have to rerun much
-parallel_res_unnest %>% write_rds(paste0(default_path, "observed_covariates.rds"))
-tictoc::toc()
-
-rm(parallel_res, parallel_res_scalar,
-   parallel_res_inf, parallel_res_unnest)
-rm(all_data_set, tracking)
-gc(verbose = FALSE)
-
-
-flog.info('Parallel observed complete.', name = 'par_obs')
+flog.info('Parallel all complete.', name = 'par_obs')
