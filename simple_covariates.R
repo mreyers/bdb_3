@@ -78,7 +78,7 @@ flog.info('Cluster prepared, running loop.', name = 'par_obs')
 
 #  # # # # #  The replacement for the loop # # #  # # # # # # 
 
-for(i in 2:17){
+for(i in 4:17){
   
   this_week <-  read_csv(paste0(default_path, "week", i, ".csv")) %>%
     select_at(select_cols) %>%
@@ -137,6 +137,7 @@ for(i in 2:17){
            pocket_dist = pmap(list(data, first_elig, last_elig),
                               ~pocket_fixed(..1, ..2, ..3)))
   
+  flog.info('Generating parallel_res', name = 'par_obs')
   parallel_res <- parallel_res_setup %>%
     mutate(basic_covariates = future_pmap(list(data, first_elig, last_elig),
                                    ~ simple_covariates(..1, ..2, ..3, run = TRUE)),
@@ -144,13 +145,13 @@ for(i in 2:17){
                                    ~ .x %>% mutate(pocket_dist = list(.y)))) %>%
     dplyr::select(-pocket_dist) # remove from exterior, now mapped it back
   
-  
+  flog.info('Generating parallel_res_temp', name = 'par_obs')
   parallel_res_temp <- parallel_res %>%
     mutate(additional_basic_covariates = future_pmap(list(data, first_elig, last_elig),
                                                      ~ additional_basic_covariates_wrapper(..1, ..2, ..3,
                                                                                            is_football = TRUE)))
   
-  
+  flog.info('Joining and unnesting, making parallel_res_joined', name = 'par_obs')
   parallel_res_joined <- parallel_res_temp %>%
     mutate(all_basic_covariates = map2(basic_covariates, additional_basic_covariates,
                                        ~ .x %>% left_join(.y, by = "frame_id_2"))) %>%
@@ -171,6 +172,8 @@ for(i in 2:17){
   parallel_res_joined %>%
     saveRDS(paste0(default_path, "all_frames_covariates_week", i, ".rds"))
   
+  rm(parallel_res, parallel_res_temp, parallel_res_setup, parallel_res_joined,
+     this_week, tracking)
 }
 
 flog.info('Parallel all complete.', name = 'par_obs')
