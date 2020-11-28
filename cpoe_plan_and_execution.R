@@ -6,7 +6,7 @@
 # Move things appropriately as they are completed
 
 # TODO:
-  # 4. Apply CP model to all frames within all plays using purrr::safely()
+  # 3. Framewise labelling for nearest receiver
   # 5. Return dataset appending CP values for each eligible receiver (non-QB) and their corresponding nearest defender
   # 6. Use Outcome - CP to generate CPOE across dataset
   # 7. Estimate value per frame using Hypothetical EPA
@@ -21,8 +21,7 @@
       # a) Simple covariates
       # b) Framewise influence
       # c) Additional framewise covariates that are not related to influence 
-  # 3. Framewise labelling for nearest receiver
-  
+  # 4. Apply CP model to all frames within all plays using purrr::safely()
 
 # # # #
 # Main
@@ -38,6 +37,14 @@ library(tidymodels)
 library(stacks)
 
 source("src/utils/tracking_helpers.R")
+
+plays_essential <- read_csv("Data/plays.csv", col_types = cols()) %>%
+  janitor::clean_names(case = "snake") %>%
+  mutate(yardline_100 = if_else(possession_team == yardline_side,
+                                100 - yardline_number,
+                                yardline_number)) %>%
+  select(game_id, play_id, down, ydstogo = yards_to_go, yardline_100)
+
 # 1. Source in observed model from nfl_tracking
   # Code and model are complete there, next time I run just save as RDS and load here
 cp_at_release_model <- readRDS("~/GitHub/nfl_tracking/src/Data_new/release/comp_prob.rds")
@@ -168,6 +175,129 @@ for(i in 1:17){
 }
 
 # 4. Apply the CP model to all frames (skipped step 3 for a second)
-one_week_covariates <- readRDS("Data/simple_and_inf_covariates_week1.rds")
+one_week_covariates <- readRDS("Data/simple_and_inf_covariates_fix_week1.rds")
+names(one_week_covariates)
 
-head(one_week_covariates)
+one_week_renamed <- one_week_covariates %>%
+  rename(qb_vel = qb_speed,
+         time_to_throw = time_throw,
+         dist_from_pocket = pocket_dist,
+         n_cells = n_close,
+         own_intensity = own_intensity_at_throw,
+         own_avg_intensity = own_avg_intensity_at_throw) %>%
+  # Remove old list column, dont think I need
+  select(-ball_at_arrival_coords)
+
+one_week_fixed_context <- one_week_renamed %>%
+  nest(-c(dist_from_pocket, first_elig, last_elig)) %>%
+  mutate(new_dist_from_pocket = map2(dist_from_pocket, first_elig,
+                                     ~ .x %>% mutate(frame_id = row_number() - 1 + .y)),
+         data = map2(data, new_dist_from_pocket, ~ .x %>% left_join(.y, by = "frame_id"))) %>%
+  select(-c(dist_from_pocket, new_dist_from_pocket)) %>%
+  unnest(data) %>%
+  left_join(plays_essential, by = c("game_id", "play_id")) %>%
+  select(-rush_sep) %>%
+  filter(!is.na(own_avg_intensity), !is.na(yardline_100))
+
+summary(one_week_fixed_context)
+# Can I just predict like this? Might need to do a drop_na above
+temp <- one_week_fixed_context %>% 
+  bind_cols(predict(cp_at_release_model, ., type = "prob"))
+
+
+for(i in 1:17){
+  one_week_covariates <- readRDS(paste0("Data/simple_and_inf_covariates_fix_week",
+                                        i,
+                                        ".rds"))
+  
+  one_week_renamed <- one_week_covariates %>%
+    rename(qb_vel = qb_speed,
+           time_to_throw = time_throw,
+           dist_from_pocket = pocket_dist,
+           n_cells = n_close,
+           own_intensity = own_intensity_at_throw,
+           own_avg_intensity = own_avg_intensity_at_throw) %>%
+    # Remove old list column, dont think I need
+    select(-ball_at_arrival_coords)
+  
+  one_week_fixed_context <- one_week_renamed %>%
+    nest(-c(dist_from_pocket, first_elig, last_elig)) %>%
+    mutate(new_dist_from_pocket = map2(dist_from_pocket, first_elig,
+                                       ~ .x %>% mutate(frame_id = row_number() - 1 + .y)),
+           data = map2(data, new_dist_from_pocket, ~ .x %>% left_join(.y, by = "frame_id"))) %>%
+    select(-c(dist_from_pocket, new_dist_from_pocket)) %>%
+    unnest(data) %>%
+    left_join(plays_essential, by = c("game_id", "play_id")) %>%
+    select(-rush_sep) %>%
+    filter(!is.na(own_avg_intensity), !is.na(yardline_100))
+  
+  # Can I just predict like this? Might need to do a drop_na above
+  one_week_preds <- one_week_fixed_context %>% 
+    bind_cols(predict(cp_at_release_model, ., type = "prob"))
+  
+  saveRDS(one_week_preds,
+          paste0("Data/cp_predictions/covariates_and_predictions_week",
+                 i,
+                 ".rds"))
+}
+
+# 4b) quickly check calibration plot for the actual observed catches
+View(one_week_preds %>%
+       filter(game_id == first(game_id), play_id == first(play_id)))
+
+  # Need to get event column into data set as I had cut previously
+target <- read_csv("Data/additional_data/targetedReceiver.csv") %>%
+  janitor::clean_names() 
+
+
+target_and_frame <- tibble()
+for(i in 1:17){
+  week1 <- read_csv(paste0("Data/week", i, ".csv"))  %>%
+    janitor::clean_names()
+  
+  week1_reduced <- week1 %>%
+    left_join(target, by = c("game_id", "play_id")) %>%
+    filter(nfl_id == target_nfl_id, event %in% c("pass_forward", "pass_shovel")) %>%
+    select(game_id, play_id, frame_id, target_nfl_id) 
+  
+  target_and_frame <- target_and_frame %>%
+    bind_rows(week1_reduced)
+}
+
+saveRDS(target_and_frame, "Data/target_and_frame.rds")
+
+# Read in all predictions and such, should probably just make a full preds frame
+all_preds <- tibble()
+for(i in 1:17){
+  all_preds <- all_preds %>%
+    bind_rows(readRDS(paste0("Data/cp_predictions/covariates_and_predictions_week",
+                             i,
+                             ".rds")))
+}
+
+saveRDS(all_preds, "Data/cp_predictions/all_predictions.rds")
+
+# Join on target_and_frame, filter
+all_preds_actually_targeted <- all_preds %>%
+  right_join(target_and_frame,
+             by = c("game_id", "play_id", "frame_id", "nfl_id" = "target_nfl_id"))
+
+all_preds_actually_targeted %>%
+  ggplot(aes(x = .pred_C)) +
+  geom_histogram() +
+  xlim(c(0,1))
+
+# I have lots of missing values in the above join, investigate
+  # 9607 missing out of 17363, roughly 50%
+all_preds_actually_targeted %>%
+  filter(!is.na(.pred_C)) %>%
+  arrange(.pred_C) %>%
+  mutate(bins = floor((row_number() - 1) / n() * 10)) %>%
+  group_by(bins) %>%
+  summarize(obs = mean(pass_result == "C", na.rm = TRUE),
+            pred = mean(.pred_C, na.rm = TRUE),
+            n = n()) %>%
+  ggplot(aes(x = pred, y = obs)) +
+  geom_point(size =3) +
+  geom_abline(intercept = 0, slope = 1, col = "red", lty = 2) +
+  xlim(c(0,1)) + ylim(c(0, 1))
