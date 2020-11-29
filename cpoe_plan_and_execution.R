@@ -496,6 +496,23 @@ defender_skills <- skill_measures$defender_id_f[,,1] %>%
   left_join(players %>% select(nfl_id, display_name) %>%
               mutate(nfl_id = as.character(nfl_id)), by = c("rowname" = "nfl_id")) %>%
   arrange(Estimate)
+
+qb_skills <- skill_measures$qb_id_f[,,1] %>%
+  data.frame() %>%
+  rownames_to_column() %>%
+  tibble() %>%
+  left_join(players %>% select(nfl_id, display_name) %>%
+              mutate(nfl_id = as.character(nfl_id)), by = c("rowname" = "nfl_id")) %>%
+  arrange(desc(Estimate))
+
+target_skills <- skill_measures$target_id_f[,,1] %>%
+  data.frame() %>%
+  rownames_to_column() %>%
+  tibble() %>%
+  left_join(players %>% select(nfl_id, display_name) %>%
+              mutate(nfl_id = as.character(nfl_id)), by = c("rowname" = "nfl_id")) %>%
+  arrange(desc(Estimate))
+
 # 7. Estimate value per frame using Hypothetical EPA
 # 8. Assign value per frame based on Hypothetical EPA, the CP * EPA hybrid from thesis
 # 9. Upweight plays corresponding to large +/-WPA moments through scale_factors.R
