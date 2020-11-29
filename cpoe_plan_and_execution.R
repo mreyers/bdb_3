@@ -38,12 +38,28 @@ library(stacks)
 
 source("src/utils/tracking_helpers.R")
 
+players <- read_csv("Data/players.csv", col_types = cols()) %>%
+  janitor::clean_names(case = "snake") 
+
+games <- read_csv("Data/games.csv", col_types = cols()) %>%
+  janitor::clean_names(case = "snake")
+
+games_reduced <- games %>%
+  select(game_id, home_team_abbr, visitor_team_abbr)
+
 plays_essential <- read_csv("Data/plays.csv", col_types = cols()) %>%
   janitor::clean_names(case = "snake") %>%
+  left_join(games_reduced, by = "game_id") %>%
   mutate(yardline_100 = if_else(possession_team == yardline_side,
                                 100 - yardline_number,
-                                yardline_number)) %>%
-  select(game_id, play_id, down, ydstogo = yards_to_go, yardline_100)
+                                yardline_number),
+         yardline_100 = if_else(is.na(yardline_100), 50, yardline_100),
+         score_differential = if_else(possession_team == home_team_abbr,
+                                      pre_snap_home_score - pre_snap_visitor_score,
+                                      -1 * (pre_snap_home_score - pre_snap_visitor_score)),
+         is_redzone = factor(yardline_100 < 20, levels = c(FALSE, TRUE))) %>%
+  select(game_id, play_id, down, ydstogo = yards_to_go, yardline_100,
+         score_differential, is_redzone, number_of_pass_rushers)
 
 # 1. Source in observed model from nfl_tracking
   # Code and model are complete there, next time I run just save as RDS and load here
@@ -220,6 +236,7 @@ for(i in 1:17){
     # Remove old list column, dont think I need
     select(-ball_at_arrival_coords)
   
+  # Supplement covariates with relevant play level info
   one_week_fixed_context <- one_week_renamed %>%
     nest(-c(dist_from_pocket, first_elig, last_elig)) %>%
     mutate(new_dist_from_pocket = map2(dist_from_pocket, first_elig,
@@ -229,7 +246,20 @@ for(i in 1:17){
     unnest(data) %>%
     left_join(plays_essential, by = c("game_id", "play_id")) %>%
     select(-rush_sep) %>%
-    filter(!is.na(own_avg_intensity), !is.na(yardline_100))
+    # Sensible default exists for score differential and yardline_100, not intensity
+    mutate(score_differential = if_else(is.na(score_differential), 0, score_differential),
+           yardline_100 = if_else(is.na(yardline_100), 50, yardline_100)) %>%
+    filter(!is.na(own_avg_intensity))
+  
+  # Add additional covariate for type of target receiver
+  one_week_fixed_context <- one_week_fixed_context %>%
+    left_join(players %>% select(nfl_id, position), by = c("nfl_id")) %>%
+    mutate(position_f = factor(case_when(
+      position == "WR" ~ "WR",
+      position == "TE" ~ "TE",
+      TRUE ~ "RB"
+    ), levels = c("WR", "TE", "RB"))) %>%
+    select(-position)
   
   # Can I just predict like this? Might need to do a drop_na above
   one_week_preds <- one_week_fixed_context %>% 
@@ -277,27 +307,195 @@ for(i in 1:17){
 
 saveRDS(all_preds, "Data/cp_predictions/all_predictions.rds")
 
-# Join on target_and_frame, filter
-all_preds_actually_targeted <- all_preds %>%
-  right_join(target_and_frame,
-             by = c("game_id", "play_id", "frame_id", "nfl_id" = "target_nfl_id"))
+# Removed the Calibration Plot exercise from here as that is in my training file
+  # nfl_tracking
 
-all_preds_actually_targeted %>%
-  ggplot(aes(x = .pred_C)) +
-  geom_histogram() +
-  xlim(c(0,1))
+# 3. Framewise labelling for nearest receiver
+  # I guess not even necessarily framewise
+  # Since this component is on CPOE, probably only really care about pass release frame
+  # and the pass result. Also would care who the nearest defender is at release and who
+  # is nearest at time of arrival. Only question is how to distribute credit.
+  # I guess preliminary model would be to assign all credit to nearest defender at time
+  # of arrival. This is the observed model so no deterrence question here. Simply
+  # CP at time of pass release and nearest defender at pass arrival.
 
-# I have lots of missing values in the above join, investigate
-  # 9607 missing out of 17363, roughly 50%
-all_preds_actually_targeted %>%
-  filter(!is.na(.pred_C)) %>%
-  arrange(.pred_C) %>%
-  mutate(bins = floor((row_number() - 1) / n() * 10)) %>%
-  group_by(bins) %>%
-  summarize(obs = mean(pass_result == "C", na.rm = TRUE),
-            pred = mean(.pred_C, na.rm = TRUE),
-            n = n()) %>%
-  ggplot(aes(x = pred, y = obs)) +
-  geom_point(size =3) +
+# Generate nearest defender at pass arrival
+
+all_preds <- readRDS("Data/cp_predictions/all_predictions.rds")
+
+play_pass_start <- c("pass_forward", "pass_shovel")
+play_pass_arrive <- c("pass_outcome_caught",
+                      "pass_outcome_incomplete", "pass_outcome_interception",
+                      "pass_outcome_interception", "pass_outcome_touchdown")
+
+
+nearest_def_and_rec <- tibble()
+for(i in 1:17){
+  one_week <- read_csv(paste0("Data/week", i, ".csv")) %>%
+    janitor::clean_names()
+  
+  
+  my_play <- one_week %>%
+    rename(velocity = s)
+  
+  possession <- my_play %>%
+    filter(team != "football") %>%
+    group_by(game_id, play_id, team) %>%
+    summarize(n_off_players = sum(position %in% c("QB", "RB", "WR", "TE")),
+              .groups = "drop_last") %>%
+    arrange(desc(n_off_players)) %>%
+    mutate(team_role = if_else(team == first(team), "off", "def")) %>%
+    select(game_id, play_id, team, team_role)
+  
+  # This will return the receiver and the nearest defender at time of pass arrival
+  my_play_with_receiver <- my_play %>%
+    left_join(target, by = c("game_id", "play_id")) %>%
+    left_join(possession, by = c("game_id", "play_id", "team")) %>%
+    filter(team_role %in% "def" | nfl_id == target_nfl_id) %>%
+    mutate(pass_start = (event %in% play_pass_start),
+           pass_arrival = (event %in% play_pass_arrive)) %>%
+    filter(pass_start | pass_arrival) %>%
+    # TRUE and FALSE groups, grabbing first frame_id will get the first frame in which
+    # there was a pass_start event and the first frame with a pass_arrival event
+    # Dont want multiple of each event as that becomes cumbersome
+    group_by(game_id, play_id, pass_start) %>%
+    filter(frame_id == first(frame_id)) %>%
+    mutate(receiver_x = sum((team_role == "off") * x, na.rm = TRUE),
+           receiver_y = sum((team_role == "off") * y, na.rm = TRUE),
+           dist_to_receiver = sqrt((x - receiver_x) ^ 2 + (y - receiver_y) ^ 2)) %>%
+    group_by(game_id, play_id, nfl_id,  display_name) %>%
+    arrange(desc(frame_id)) %>%
+    # Negative is good
+    summarize(team_role = first(team_role),
+              throw_frame = last(frame_id),
+              arrival_frame = first(frame_id),
+              closed_distance = first(dist_to_receiver) - last(dist_to_receiver),
+              distance_to_go_still = first(dist_to_receiver),
+              time_elapsed_in_frames = first(frame_id) - last(frame_id),
+              time_elapsed_in_seconds = time_elapsed_in_frames / 10,
+              .groups = "drop") %>%
+    arrange(distance_to_go_still) %>%
+    group_by(game_id, play_id, team_role) %>%
+    slice(1)
+  
+  nearest_def_and_rec <- nearest_def_and_rec %>%
+    bind_rows(my_play_with_receiver)
+}
+
+# This holds the nearest defender to the targeted receiver on any given play in dataset
+nearest_def_wide <- nearest_def_and_rec %>%
+  group_by(game_id, play_id) %>%
+  mutate(target_nfl_id = if_else(first(team_role) %in% "off",
+                                 first(nfl_id),
+                                 last(nfl_id))) %>%
+  filter(team_role %in% "def")
+
+# 5. Return dataset appending CP values for each targeted receiver (non-QB) and their corresponding nearest defender
+all_preds_with_defenders <- all_preds %>%
+  filter(nfl_id == target) %>%
+  left_join(nearest_def_wide %>%
+              select(game_id, play_id, defender_id = nfl_id, defender_name = display_name,
+                     closed_distance, distance_to_go_still, throw_frame, arrival_frame),
+            by = c("game_id", "play_id")) %>%
+  filter(frame_id == throw_frame) 
+
+# 6. Use Outcome - CP to generate CPOE across dataset
+basic_cpoe <- all_preds_with_defenders %>%
+  group_by(defender_id) %>%
+  summarize(defender = first(defender_name),
+            n_games = length(unique(game_id)),
+            nearest_rec_targeted = n(),
+            nearest_rec_completed = sum(pass_result == "C"),
+            comp_perc_allowed = nearest_rec_completed / nearest_rec_targeted,
+            exp_comp_perc_allowed = mean(.pred_C),
+            cpoe = mean(as.numeric(pass_result == "C") - .pred_C),
+            .groups = "drop"
+  )
+
+basic_cpoe %>% 
+  filter(n_games > 10) %>%
+  arrange(cpoe) %>%
+  View()
+
+  # 6.a) Estimate an adjusted CP based on relevant QB and Target
+qb_play <- all_preds %>%
+  group_by(game_id, play_id) %>%
+  filter(frame_id == first(frame_id)) %>%
+  left_join(players %>% select(nfl_id, position) %>% filter(position %in% "QB"), by = "nfl_id") %>%
+  filter(!is.na(position)) %>%
+  select(game_id, play_id, qb_id = nfl_id)
+
+all_preds_with_defenders_and_qbs <- all_preds_with_defenders %>%
+  left_join(qb_play, by = c("game_id", "play_id")) %>%
+  mutate(pass_result_bin = if_else(pass_result %in% "C", 1, 0),
+         qb_id_f = factor(qb_id),
+         target_id_f = factor(nfl_id),
+         defender_id_f = factor(defender_id),
+         logit_pred_c = case_when(.pred_C < 0.01 ~ log(0.01 / 0.99),
+                                  .pred_C > 0.99 ~ log(0.99 / 0.01),
+                                  TRUE ~ log(.pred_C / (1 - .pred_C))))
+
+library(brms)
+# Super simple brms model to estimate adjustment to CP
+tictoc::tic()
+basic_brms_adjust <- brm(pass_result_bin ~ logit_pred_c +
+                           (1|qb_id_f) + (1|target_id_f) + (1|defender_id_f),
+                               data = all_preds_with_defenders_and_qbs,
+                               family = bernoulli(),
+                               chains = 2,
+                               warmup = 1000,
+                               iter = 3000,
+                         cores = 2,
+                         silent = FALSE)
+tictoc::toc()
+
+# Yeah ok this seems to work alright
+summary(basic_brms_adjust)
+
+# Lets get the predictions for each observation then from this
+  # Will represent adjusted probability
+adjusted_pred_c_all <- predict(basic_brms_adjust,
+                               re_formula = ~ (1|qb_id_f) + (1|target_id_f) + (1|defender_id_f))
+adjusted_pred_c_no_def <- predict(basic_brms_adjust,
+                                  re_formula = ~ (1|qb_id_f) + (1|target_id_f))
+
+  # 6 a) Do value attribution via result - adjusted_pred_c_no_def
+value_attr <- all_preds_with_defenders_and_qbs %>%
+  # First column is the prediction
+  mutate(pred_c_no_def = adjusted_pred_c_no_def[,1]) %>%
+  group_by(defender_id) %>%
+  summarize(defender = first(defender_name),
+            n_games = length(unique(game_id)),
+            nearest_rec_targeted = n(),
+            nearest_rec_completed = sum(pass_result == "C"),
+            comp_perc_allowed = nearest_rec_completed / nearest_rec_targeted,
+            exp_comp_perc_allowed = mean(.pred_C),
+            exp_comp_perc_allowed_given_players = mean(pred_c_no_def),
+            cpoe = sum(as.numeric(pass_result == "C") - .pred_C),
+            cpoe_controlled =  sum(as.numeric(pass_result == "C") - pred_c_no_def),
+            .groups = "drop"
+  )
+
+value_attr %>%
+  arrange(cpoe_controlled) %>%
+  slice(1:20) %>% View()
+
+value_attr %>%
+  ggplot(aes(x = cpoe, y = cpoe_controlled, size = nearest_rec_targeted)) +
+  geom_point() +
   geom_abline(intercept = 0, slope = 1, col = "red", lty = 2) +
-  xlim(c(0,1)) + ylim(c(0, 1))
+  ggtitle("Comparison of BRMS regulated vs uncontrolled CPOE") +
+  theme_bw()
+
+  # 6 b) Measure defensive skill via coefficient estimates in model
+skill_measures <- ranef(basic_brms_adjust)
+defender_skills <- skill_measures$defender_id_f[,,1] %>%
+  data.frame() %>%
+  rownames_to_column() %>%
+  tibble() %>%
+  left_join(players %>% select(nfl_id, display_name) %>%
+              mutate(nfl_id = as.character(nfl_id)), by = c("rowname" = "nfl_id")) %>%
+  arrange(Estimate)
+# 7. Estimate value per frame using Hypothetical EPA
+# 8. Assign value per frame based on Hypothetical EPA, the CP * EPA hybrid from thesis
+# 9. Upweight plays corresponding to large +/-WPA moments through scale_factors.R
