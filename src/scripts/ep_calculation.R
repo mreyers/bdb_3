@@ -32,7 +32,7 @@ ep_for_receivers_exact <- function(all_frames_with_pbp, game_id_par, play_id_par
   line_of_scrimmage <- round(yardline_100)
   
   # Now calculate the new situation for each play, assuming line_of_scrimmage is in tracking coord system
-  change_df <- data.frame(los = line_of_scrimmage,
+  change_df <- data.frame(los = all_frames_with_pbp$line_of_scrim_x,
                           ydstogo = ydstogo,
                           down = down,
                           yardlines = ceiling(all_frames_with_pbp$yards_downfield),
@@ -312,11 +312,23 @@ nfl_data <- read_csv("Data/plays.csv") %>%
          )
 
 ep_requirements <- nfl_data %>%
+  arrange(game_id, play_id) %>%
   dplyr::select(game_id, play_id, half_seconds_remaining,
-                yardline_100, down, ydstogo = yards_to_go, goal_to_go)
+                yardline_100, down, ydstogo = yards_to_go, goal_to_go,
+                # Keep this for figuring out direction of play
+                yardline_number, absolute_yardline_number) %>%
+  mutate(half_seconds_remaining = if_else(is.na(half_seconds_remaining),
+                                          # 500 seconds is arbitrary
+                                          lag(half_seconds_remaining, default = 500),
+                                          half_seconds_remaining),
+         # 60 is midfield
+         absolute_yardline_number = if_else(is.na(absolute_yardline_number),
+                                            lag(absolute_yardline_number, default = 60),
+                                            absolute_yardline_number)) %>%
+  # Just default the remaining issues
+  mutate(half_seconds_remaining = if_else(is.na(half_seconds_remaining), 500, half_seconds_remaining),
+         absolute_yardline_number = if_else(is.na(absolute_yardline_number), 60, absolute_yardline_number))
 
-add_los <- ep_requirements %>%
-  select(game_id, play_id, yardline_100)
 
 play_params <- ep_requirements %>%
   filter(game_id == first(game_id), play_id == 75)
@@ -330,73 +342,51 @@ initial_ep <- nflscrapR::calculate_expected_points(play_params, "half_seconds_re
   # For now I'll set YAC to 0 as we dont yet have a model for that
   # yards_downfield is just receiver_x - los, I have these x,y coords in all_preds
 all_preds_adj <- all_preds %>%
-  left_join(all_preds, by = c("game_id", "play_id")) %>%
+  left_join(ep_requirements %>% select(game_id, play_id,
+                                       yardline_number, absolute_yardline_number),
+            by = c("game_id", "play_id")) %>%
   group_by(game_id, play_id) %>%
-  mutate(n_qb_left = sum(dist_to_qb == 0 & x < yardline_100, na.rm = TRUE),
-         n_qb_right = sum(dist_to_qb == 0 & x > yardline_100, na.rm = TRUE),
+  mutate(line_of_scrim_x = absolute_yardline_number) %>%
+  # Field goes from 10 to 110 in x, be wary
+    # This is fine, line_of_scrim_x is in the same units
+  mutate(n_qb_left = sum(dist_to_qb == 0 & x < line_of_scrim_x, na.rm = TRUE),
+         n_qb_right = sum(dist_to_qb == 0 & x > line_of_scrim_x, na.rm = TRUE),
          direction_of_play = if_else(n_qb_left > n_qb_right,
                                      "right",
-                                     "left"))
-  mutate(yards_downfield = )
+                                     "left")) %>%
+  mutate(yards_downfield = case_when(
+    direction_of_play %in% "right" ~ arrival_x - line_of_scrim_x,
+    direction_of_play %in% "left" ~ line_of_scrim_x - arrival_x
+    ),
+    yards_downfield = ceiling(yards_downfield),
+    # Update yac later when we have it
+    yac = 0,
+    frame_id_2 = frame_id,
+    receiver = nfl_id) %>%
+  # De-select as I have these in a global object that I'll call in fn
+  select(-c(yardline_number, absolute_yardline_number))
+
 # ceiling(all_frames_with_pbp$yards_downfield),
 # yac = all_frames_with_pbp$yac,
 # frame_id_2 = all_frames_with_pbp$frame_id_2,
 # display_name = as.character(all_frames_with_pbp$display_name),
 # receiver = as.character(all_frames_with_pbp$receiver))
 
-# 
-# temp <- all_frames_exp_yards %>%
-#   ungroup() %>%
-#   mutate(yac = yac_preds) %>%
-#   nest(-game_id, -play_id, -yardline_100, -ydstogo, -down) %>%
-#   filter(game_id == 2017090700, play_id == 94) %>%
-#   mutate(ep_rec = pmap(list(data, game_id, play_id, yardline_100, ydstogo, down), 
-#                        ~ep_for_receivers_exact(..1, ..2, ..3, ..4, ..5, ..6)))
+# Ran in about 20 minutes, check results
+first_pass_ep <- all_preds_adj %>%
+  ungroup() %>%
+  #mutate(yac = yac_preds) %>%
+  nest(-game_id, -play_id, -yardline_100, -ydstogo, -down) %>%
+  #filter(game_id == first(game_id), play_id == first(play_id)) %>%
+  mutate(ep_rec = pmap(list(data, game_id, play_id, yardline_100, ydstogo, down),
+                       ~ep_for_receivers_exact(..1, ..2, ..3, ..4, ..5, ..6)))
 
 
+first_pass_ep_unnested <- first_pass_ep %>%
+  mutate(check_join = map2(data, ep_rec, ~ .x %>% mutate(receiver = as.character(receiver)) %>%
+                             left_join(.y %>% select( -yac, -down, -ydstogo),
+                                       by = c("frame_id_2", "receiver", "display_name")))) %>%
+  select(-c(data, ep_rec)) %>%
+  unnest(check_join)
 
-# # Now do more generically with all the plays observed values
-# tic()
-
-# 
-# OffWinProb <- as.numeric(mgcv::predict.bam(wp_model,newdata=all_with_win_prob,
-#                                            type = "response"))
-# DefWinProb <- 1 - OffWinProb
-# 
-# all_with_win_prob <- all_with_win_prob %>%
-#   mutate(off_wp = OffWinProb,
-#          def_wp = DefWinProb)
-# toc()
-# 
-# # So I can successfully calculate WP with no NA values for the passing plays in my data set
-# # Now I just need to do it for each artificial conclusion to a play
-# bare_minimum <- test_play %>% 
-#   dplyr::select(game_id, play_id, epa_of_pass) # Just need epa because I can add that to ExpScoreDiff to update
-# 
-# joining_set <- all_with_win_prob %>%
-#   dplyr::select(GameID, play_id, qtr, down, yrdline100, Half_Ind, Season, Month,
-#                 score_time_ratio, TimeSecs_Remaining, Time_Yard_Ratio,
-#                 TimeSecs, TimeSecs_Adj, ScoreDiff,
-#                 TimeUnder, posteam_timeouts_pre, oppteam_timeouts_pre,
-#                 HomeTimeouts_Remaining_Pre, AwayTimeouts_Remaining_Pre, Under_TwoMinute_Warning,
-#                 posteam, HomeTeam, AwayTeam,
-#                 ExpScoreDiff, ExpScoreDiff_Time_Ratio, off_wp, def_wp) %>%
-#   mutate(GameID = as.numeric(GameID), play_id = as.numeric(play_id))
-# 
-# # Now to create an updated set of covariates, which really is just updating the ExpScoreDiff
-# # and time possibly (or leave it as is)
-# simple_together <- bare_minimum %>%
-#   left_join(joining_set, by = c('game_id' = 'GameID', 'play_id')) %>%
-#   mutate(ExpScoreDiff = (ExpScoreDiff + epa_of_pass),
-#          ExpScoreDiff_Time_Ratio = (ExpScoreDiff + 1) / (TimeSecs_Adj + 1))
-# 
-# off_win_prob <- as.numeric(mgcv::predict.bam(wp_model,newdata=simple_together,
-#                                              type = "response"))
-# def_win_prob <- 1 - off_win_prob
-# 
-# simple_together <- simple_together %>%
-#   mutate(new_off_wp = off_win_prob,
-#          new_def_wp = def_win_prob,
-#          wpa = new_off_wp - off_wp)
-# 
-# # So this surprisingly worked, time to generalize further hopefully
+saveRDS(first_pass_ep_unnested, "Data/first_pass_ep.rds")

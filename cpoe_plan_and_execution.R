@@ -445,7 +445,7 @@ basic_brms_adjust <- brm(pass_result_bin ~ logit_pred_c +
                                family = bernoulli(),
                                chains = 2,
                                warmup = 1000,
-                               iter = 3000,
+                               iter = 1500,
                          cores = 2,
                          silent = FALSE)
 tictoc::toc()
@@ -516,6 +516,47 @@ target_skills <- skill_measures$target_id_f[,,1] %>%
 
 # 7. Estimate value per frame using Hypothetical EPA
   # Going to source this one ine from ep_calculation.R
+first_pass_ep_unnested <- readRDS("Data/first_pass_ep.rds")
 
 # 8. Assign value per frame based on Hypothetical EPA, the CP * EPA hybrid from thesis
+act_epa <- read_csv("Data/plays.csv") %>%
+  janitor::clean_names() %>%
+  select(game_id, play_id, observed_epa = epa)
+
+# Add a join feature as I lose a few plays somewhere
+join_holder <- all_preds_with_defenders_and_qbs %>%
+  # First column is the prediction
+  mutate(pred_c_no_def = adjusted_pred_c_no_def[,1]) %>%
+  select(game_id, play_id, nfl_id, pred_c_no_def)
+
+all_preds_with_defenders_and_epa <- first_pass_ep_unnested %>%
+  filter(nfl_id == target) %>%
+  left_join(nearest_def_wide %>%
+              select(game_id, play_id, defender_id = nfl_id, defender_name = display_name,
+                     closed_distance, distance_to_go_still, throw_frame, arrival_frame),
+            by = c("game_id", "play_id")) %>%
+  filter(frame_id == throw_frame) %>%
+  left_join(act_epa, by = c("game_id", "play_id")) %>%
+  left_join(join_holder, by = c("game_id", "play_id", "nfl_id")) %>%
+  mutate(hypothetical_epa = pred_c_no_def * complete_epa + (1 - pred_c_no_def) * incomplete_epa,
+         epa_allowed_above_hypothetical = observed_epa - hypothetical_epa)
+
+# Lets see some summaries
+ranked_2018_defenders <- all_preds_with_defenders_and_epa %>%
+  # Problematic play, clearly something wrong in most calculations, gets duplicated a bunch
+  filter(!(game_id == 2018092300 & play_id == 4480)) %>%
+  group_by(defender_name) %>%
+  summarize(defender = first(defender_name),
+            n_games = length(unique(game_id)),
+            nearest_rec_targeted = n(),
+            nearest_rec_completed = sum(pass_result == "C"),
+            comp_perc_allowed = nearest_rec_completed / nearest_rec_targeted,
+            exp_comp_perc_allowed = mean(.pred_C),
+            exp_comp_perc_allowed_given_players = mean(pred_c_no_def),
+            cpoe = sum(as.numeric(pass_result == "C") - .pred_C),
+            cpoe_controlled =  sum(as.numeric(pass_result == "C") - pred_c_no_def),
+            tot_epa_allowed_above_exp = sum(epa_allowed_above_hypothetical),
+            .groups = "drop") %>%
+  arrange(tot_epa_allowed_above_exp)
+
 # 9. Upweight plays corresponding to large +/-WPA moments through scale_factors.R
