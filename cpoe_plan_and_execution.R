@@ -6,9 +6,7 @@
 # Move things appropriately as they are completed
 
 # TODO:
-  # 3. Framewise labelling for nearest receiver
-  # 5. Return dataset appending CP values for each eligible receiver (non-QB) and their corresponding nearest defender
-  # 6. Use Outcome - CP to generate CPOE across dataset
+  
   # 7. Estimate value per frame using Hypothetical EPA
   # 8. Assign value per frame based on Hypothetical EPA, the CP * EPA hybrid from thesis
   # 9. Upweight plays corresponding to large +/-WPA moments through scale_factors.R
@@ -21,7 +19,10 @@
       # a) Simple covariates
       # b) Framewise influence
       # c) Additional framewise covariates that are not related to influence 
+  # 3. Framewise labelling for nearest receiver
   # 4. Apply CP model to all frames within all plays using purrr::safely()
+  # 5. Return dataset appending CP values for each eligible receiver (non-QB) and their corresponding nearest defender
+  # 6. Use Outcome - CP to generate CPOE across dataset
 
 # # # #
 # Main
@@ -514,5 +515,7 @@ target_skills <- skill_measures$target_id_f[,,1] %>%
   arrange(desc(Estimate))
 
 # 7. Estimate value per frame using Hypothetical EPA
+  # Going to source this one ine from ep_calculation.R
+
 # 8. Assign value per frame based on Hypothetical EPA, the CP * EPA hybrid from thesis
 # 9. Upweight plays corresponding to large +/-WPA moments through scale_factors.R
