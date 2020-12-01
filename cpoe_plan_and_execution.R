@@ -7,9 +7,8 @@
 
 # TODO:
   
-  # 7. Estimate value per frame using Hypothetical EPA
-  # 8. Assign value per frame based on Hypothetical EPA, the CP * EPA hybrid from thesis
   # 9. Upweight plays corresponding to large +/-WPA moments through scale_factors.R
+    # Not doable, cant use external data
   
 
 
@@ -23,6 +22,8 @@
   # 4. Apply CP model to all frames within all plays using purrr::safely()
   # 5. Return dataset appending CP values for each eligible receiver (non-QB) and their corresponding nearest defender
   # 6. Use Outcome - CP to generate CPOE across dataset
+  # 7. Estimate value per frame using Hypothetical EPA
+  # 8. Assign value per frame based on Hypothetical EPA, the CP * EPA hybrid from thesis
 
 # # # #
 # Main
@@ -41,6 +42,9 @@ source("src/utils/tracking_helpers.R")
 
 players <- read_csv("Data/players.csv", col_types = cols()) %>%
   janitor::clean_names(case = "snake") 
+
+target <- read_csv("Data/additional_data/targetedReceiver.csv") %>%
+  janitor::clean_names() 
 
 games <- read_csv("Data/games.csv", col_types = cols()) %>%
   janitor::clean_names(case = "snake")
@@ -277,9 +281,6 @@ View(one_week_preds %>%
        filter(game_id == first(game_id), play_id == first(play_id)))
 
   # Need to get event column into data set as I had cut previously
-target <- read_csv("Data/additional_data/targetedReceiver.csv") %>%
-  janitor::clean_names() 
-
 
 target_and_frame <- tibble()
 for(i in 1:17){
@@ -364,7 +365,7 @@ for(i in 1:17){
     mutate(receiver_x = sum((team_role == "off") * x, na.rm = TRUE),
            receiver_y = sum((team_role == "off") * y, na.rm = TRUE),
            dist_to_receiver = sqrt((x - receiver_x) ^ 2 + (y - receiver_y) ^ 2)) %>%
-    group_by(game_id, play_id, nfl_id,  display_name) %>%
+    group_by(game_id, play_id, nfl_id, display_name) %>%
     arrange(desc(frame_id)) %>%
     # Negative is good
     summarize(team_role = first(team_role),
@@ -539,7 +540,10 @@ all_preds_with_defenders_and_epa <- first_pass_ep_unnested %>%
   left_join(act_epa, by = c("game_id", "play_id")) %>%
   left_join(join_holder, by = c("game_id", "play_id", "nfl_id")) %>%
   mutate(hypothetical_epa = pred_c_no_def * complete_epa + (1 - pred_c_no_def) * incomplete_epa,
-         epa_allowed_above_hypothetical = observed_epa - hypothetical_epa)
+         # no_yac should be complete_epa if caught, but allow run backs if picked
+         no_yac_epa = if_else(pass_result == "C", complete_epa, observed_epa),
+         # Would typically use observed_epa instead of no_yac but we only care about catch here
+         epa_allowed_above_hypothetical = no_yac_epa - hypothetical_epa)
 
 # Lets see some summaries
 ranked_2018_defenders <- all_preds_with_defenders_and_epa %>%
@@ -560,3 +564,59 @@ ranked_2018_defenders <- all_preds_with_defenders_and_epa %>%
   arrange(tot_epa_allowed_above_exp)
 
 # 9. Upweight plays corresponding to large +/-WPA moments through scale_factors.R
+  # Actually cant do that, we cant use the WPA data available in the nflfastR data
+  # As is, this is currently an okay spot to stop on cpoe
+
+# Lets just do some plots instead
+ranked_2018_defenders %>%
+  ggplot(aes(x = tot_epa_allowed_above_exp)) +
+  geom_histogram() +
+  ggtitle("Current Distribution of EPA Above Expected") +
+  xlab("Total EPA Above Exp (Smaller is better)") +
+  ylab("Count") +
+  theme_bw()
+
+defender_skills %>%# qb, target
+  mutate(rank = row_number()) %>%
+  ggplot(aes(x = rank, y = Estimate)) +
+  geom_errorbar(aes(ymin = `Q2.5`, ymax = `Q97.5`)) +
+  geom_point(col = "red") +
+  ggtitle("Defender Skill Distribution") +
+  xlab("Rank") +
+  theme_bw()
+
+defender_skills %>%
+  ggplot(aes(x = Estimate)) +
+  geom_histogram() +
+  ggtitle("Defender Skill Distribution") +
+  theme_bw()
+
+qb_skills %>%# qb, target
+  mutate(rank = row_number()) %>%
+  ggplot(aes(x = rank, y = Estimate)) +
+  geom_errorbar(aes(ymin = `Q2.5`, ymax = `Q97.5`)) +
+  geom_point(col = "red") +
+  ggtitle("Quarterback Skill Distribution") +
+  xlab("Rank") +
+  theme_bw()
+
+qb_skills %>%
+  ggplot(aes(x = Estimate)) +
+  geom_histogram() +
+  ggtitle("Quarterback Skill Distribution") +
+  theme_bw()
+
+target_skills %>%# qb, target
+  mutate(rank = row_number()) %>%
+  ggplot(aes(x = rank, y = Estimate)) +
+  geom_errorbar(aes(ymin = `Q2.5`, ymax = `Q97.5`)) +
+  geom_point(col = "red") +
+  ggtitle("Target Skill Distribution") +
+  xlab("Rank") +
+  theme_bw()
+
+target_skills %>%
+  ggplot(aes(x = Estimate)) +
+  geom_histogram() +
+  ggtitle("Target Skill Distribution") +
+  theme_bw()
