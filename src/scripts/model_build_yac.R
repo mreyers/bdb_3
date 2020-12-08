@@ -25,6 +25,9 @@ flog.info('Loading in standard nflscrapR data. Have updated to nflfastR
 games_reduced <- games %>%
   select(game_id, home_team_abbr, visitor_team_abbr)
 
+plays <- read_csv("Data/plays.csv") %>%
+  janitor::clean_names()
+
 # One weird yards to go / distance combo in PHI vs ATL, not sure why, probably data record error
 seasons <- 2018
 nfl_pbp <- plays %>%
@@ -44,16 +47,51 @@ nfl_pbp <- plays %>%
                 play_id, yardline_100, down, ydstogo = yards_to_go,
                 score_differential, is_redzone, number_of_pass_rushers)
 
+# Additional data necessary to recreate what I did for CP
+nfl_data <- read_csv("Data/plays.csv") %>%
+  janitor::clean_names() %>%
+  left_join(games_reduced, by = "game_id") %>%
+  # It weirdly includes milliseconds so I modified
+  mutate(numeric_time = as.POSIXct(game_clock, "%H:%M"),
+         numeric_minutes = as.numeric(format(numeric_time, "%H")),
+         numeric_seconds = as.numeric(format(numeric_time, "%M")),
+         half_seconds_remaining = if_else(quarter == 1 | quarter == 3,
+                                          15 * 60 + numeric_minutes * 60 + numeric_seconds,
+                                          numeric_minutes * 60 + numeric_seconds),
+         yardline_100 = if_else(possession_team == yardline_side,
+                                100 - yardline_number,
+                                yardline_number),
+         yardline_100 = if_else(is.na(yardline_100), 50, yardline_100),
+         # Pseudo goal to go detector, yards_to_go can only satisfy if endzone is FD
+         goal_to_go = if_else(yards_to_go >= yardline_100, 1, 0)
+  )
+
+ep_requirements <- nfl_data %>%
+  arrange(game_id, play_id) %>%
+  dplyr::select(game_id, play_id, half_seconds_remaining,
+                yardline_100, down, ydstogo = yards_to_go, goal_to_go,
+                # Keep this for figuring out direction of play
+                yardline_number, absolute_yardline_number) %>%
+  mutate(half_seconds_remaining = if_else(is.na(half_seconds_remaining),
+                                          # 500 seconds is arbitrary
+                                          lag(half_seconds_remaining, default = 500),
+                                          half_seconds_remaining),
+         # 60 is midfield
+         absolute_yardline_number = if_else(is.na(absolute_yardline_number),
+                                            lag(absolute_yardline_number, default = 60),
+                                            absolute_yardline_number)) %>%
+  # Just default the remaining issues
+  mutate(half_seconds_remaining = if_else(is.na(half_seconds_remaining), 500, half_seconds_remaining),
+         absolute_yardline_number = if_else(is.na(absolute_yardline_number), 60, absolute_yardline_number))
+
+
 flog.info('Set up really simple data splitting. Can obviously
           be improved, may be later. Who knows.', name = 'yac')
 set.seed(1312020)
 new_features <-
   ngs_features %>%
-  filter(pass_result %in% c("C", "I")) %>%
-  left_join(nfl_pbp, by = c('game_id', 'play_id')) %>%
-  group_by(pass_result) %>% 
-  mutate(pass_result = if_else(pass_result %in% 'C', 'C', 'I'),
-         pass_result_f = factor(pass_result, levels = c("C", "I"))) %>%
+  # YAC only exists for completions
+  filter(pass_result %in% c("C")) %>%
   left_join(players %>% select(nfl_id, position), by = c("target" = "nfl_id")) %>%
   mutate(position_f = factor(case_when(
     position == "WR" ~ "WR",
@@ -63,10 +101,39 @@ new_features <-
   select(-position) %>%
   # Most of these are flagged plays, a few random data errors
   filter(!is.na(score_differential))
-rm(ngs_features)
 
-# For the new data, I should definitely remove rush separation as new data
-# has no lineman information
+# Need to build a response variable for YAC
+# Cant just mindlessly use nflfastR covariates, that is cheating
+# I think I already have it in new_features, just not made yet. Lets find out
+new_features_with_yards_downfield <- all_preds %>%
+  left_join(ep_requirements %>% select(game_id, play_id,
+                                       yardline_number, absolute_yardline_number),
+            by = c("game_id", "play_id")) %>%
+  group_by(game_id, play_id) %>%
+  mutate(line_of_scrim_x = absolute_yardline_number) %>%
+  # Field goes from 10 to 110 in x, be wary
+  # This is fine, line_of_scrim_x is in the same units
+  mutate(n_qb_left = sum(dist_to_qb == 0 & x < line_of_scrim_x, na.rm = TRUE),
+         n_qb_right = sum(dist_to_qb == 0 & x > line_of_scrim_x, na.rm = TRUE),
+         direction_of_play = if_else(n_qb_left > n_qb_right,
+                                     "right",
+                                     "left")) %>%
+  mutate(yards_downfield = case_when(
+    direction_of_play %in% "right" ~ arrival_x - line_of_scrim_x,
+    direction_of_play %in% "left" ~ line_of_scrim_x - arrival_x
+  ),
+  yards_downfield = ceiling(yards_downfield),
+  # Update yac later when we have it
+  yac = 0,
+  frame_id_2 = frame_id,
+  receiver = nfl_id) %>%
+  # De-select as I have these in a global object that I'll call in fn
+  select(-c(yardline_number, absolute_yardline_number)) %>%
+  group_by(game_id, play_id) %>%
+  # Could have used last_elig
+  filter(nfl_id == target, frame_id_2 == max(frame_id_2)) %>%
+  ungroup()
+
 
 # There should be additional preprocessing steps that are useful via recipes
 # General approach:

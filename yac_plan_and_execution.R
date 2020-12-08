@@ -144,6 +144,18 @@ all_preds_with_defenders <- all_preds %>%
             by = c("game_id", "play_id")) %>%
   filter(frame_id == arrival_frame) 
 
+# This is currently missing some plays for some reason
+  # e.g. game 2018090600, play 190, 33 yard catch
+  # Occurs in plays.csv but not in all_preds_with_defenders
 saveRDS(all_preds_with_defenders, "Data/yac/covariates.rds")
 
+  # Before writing the tuning script, need to get the defender that eventually
+  # makes the tackle / force out on any completion. I think I will ultimately
+  # give benefit to the tackler and debit the nearest defender
+  # Feedback will eventually come from team
+  # Actually, I dont need to have an answer for this right now, I can still build
+  # YAC model without knowing this.
 # Skip over to go write a model tuning script for this
+
+# Eventually come back and use tracking elements to identify the nearest defender when
+# a tackle / out of bounds event occurs
