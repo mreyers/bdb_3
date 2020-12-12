@@ -24,7 +24,7 @@ animate_play <- function(example.play, standardized = FALSE, complete = NA){
   # Add completion probability to receivers
   if(!is.na(complete)){
     complete <- complete %>%
-      dplyr::select(display_name, frame_id = frame_id_2, completion_prob_pred)
+      dplyr::select(nfl_id,frame_id, completion_prob_pred)
     
     example.play <- example.play %>%
       left_join(complete) %>%
