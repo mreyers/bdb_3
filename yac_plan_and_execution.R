@@ -69,8 +69,7 @@ all_preds <- readRDS("Data/cp_predictions/all_predictions.rds")
 # Append nearest defender and filter down to arrival frame in this case
   # Recycling but modifying steps 4 and 5 from CPOE
 play_pass_start <- c("pass_forward", "pass_shovel")
-play_pass_arrive <- c("pass_outcome_caught",
-                      "pass_outcome_incomplete", "pass_outcome_interception",
+play_pass_arrive <- c("pass_outcome_caught", "pass_outcome_incomplete",
                       "pass_outcome_interception", "pass_outcome_touchdown")
 
 
