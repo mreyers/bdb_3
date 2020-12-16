@@ -105,8 +105,10 @@ all_preds_defenders_yac <- all_preds_with_defenders_no_na_pr %>%
   mutate(is_comp = 1 * (pass_result == "C"),
          # Offense gains YAC on completion
          offense_yac = is_comp * (offense_play_result - yards_downfield),
-         # Overall YAC can differ if the pass is not complete
-         overall_yac = (1 - is_comp) * (play_result - yards_downfield),
+         # Overall YAC can differ on fumbles
+         overall_yac = if_else(!is.na(penalty_codes),
+                               offense_yac,
+                              (play_result - yards_downfield)),
          # Also want YAC on non-penalty plays as a result of fumble
          fumble_yac = is.na(penalty_codes) * (play_result - offense_play_result))
 
@@ -120,21 +122,38 @@ all_preds_defenders_yac %>%
 
 # Hmm distribution isnt quite what I would expect, not horribly far off
 # Skewed Gaussian likely, start with a preliminary fit on offense_yac and see where that goes
-# Im just going to toss this in a BRMS and see what happens
+# Im just going to toss this in a glmer and see what happens
 # Can come back and tailor things later
-library(brms)
+library(lme4)
 defender_yac_setup <- all_preds_defenders_yac %>%
   mutate(logit_comp = case_when(.pred_C < 0.01 ~ log(0.01 / 0.99),
                                 .pred_C > 0.99 ~ log(0.99 / 0.01),
                                 TRUE ~ log(.pred_C / (1 - .pred_C))),
-         yards_to_endzone_at_catch = yardline_100 - yards_downfield) %>%
+         yards_to_endzone_at_catch = yardline_100 - yards_downfield,
+         defender_id_f = factor(defender_id)) %>%
   filter(!is.na(offense_yac), pass_result == "C")
 
 # Lets try this
-simple_yac <- brms(offense_yac ~ logit_comp + rec_separation + velocity +
+simple_yac <- lmer(offense_yac ~ logit_comp + rec_separation + velocity +
                      yards_to_endzone_at_catch + is_redzone + closed_distance +
-                     distance_to_go_still,
-                   data = defender_yac_setup,
-                   chains = 2,
-                   warmup = 1000,
-                   iter = 2000)
+                     distance_to_go_still + position_f + (1|defender_id_f),
+                   data = defender_yac_setup)
+
+summary(simple_yac)
+
+# Estimate expected yards after catch per play
+yac_preds <- predict(simple_yac, re.form = NA)
+
+# Bring it together
+defender_yac_preds <- defender_yac_setup %>%
+  mutate(yac_pred = yac_preds)
+
+# Lets see what a summary result looks like
+defender_yac_preds %>%
+  group_by(defender_id) %>%
+  summarize(player = first(defender_name),
+            n = n(),
+            tot_yac = sum(offense_yac),
+            tot_off_yacoe = sum(offense_yac - yac_pred),
+            tot_yacoe = sum(overall_yac - yac_pred)) %>%
+  arrange(desc(tot_yacoe))
