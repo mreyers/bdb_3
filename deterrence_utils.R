@@ -1,10 +1,9 @@
 create_train_data <- function(track_week_data, cp_data) {
-  #browser()
+  browser()
   
   cp_week_df <-
-    cp_data %>% select(game_id, play_id, nfl_id, frame_id, air_yards_x, .pred_C) %>%
-    rename(cp = .pred_C,
-           air_yards = air_yards_x)
+    cp_data %>% select(game_id, play_id, nfl_id, frame_id, air_yards_x, air_dist, sideline_sep, .pred_C) %>%
+    rename(cp = .pred_C)
   
   week_x <-
     track_week_data[!duplicated(track_week_data[, c("nflId", "gameId", "playId", "frameId")]), ]
@@ -21,7 +20,21 @@ create_train_data <- function(track_week_data, cp_data) {
     filter(event %in% c("pass_forward")) %>%
     filter(!is.na(x) | !is.na(y)) %>%
     group_by(nfl_id, game_id, play_id, display_name) %>%
-    tidyr::nest(tracking_data = c(x, y, s, o, a, cp, air_yards, dis, dir, time, frame_id, event))
+    tidyr::nest(tracking_data = c(
+      x,
+      y,
+      s,
+      o,
+      a,
+      cp,
+      air_yards_x,
+      air_dist,
+      dis,
+      dir,
+      time,
+      frame_id,
+      event
+    ))
   
   
   nest_test = nest_df %>%  left_join(game_deets) %>% left_join(play_df) %>%
@@ -45,12 +58,40 @@ create_train_data <- function(track_week_data, cp_data) {
   ) %>% group_by(game_id, play_id) %>% tidyr::nest()
   
   play <-
-    play_nest %>% group_by(game_id, play_id) %>%  mutate(new_df = purrr::map(data, extract_defender)) %>%
+    play_nest %>% group_by(game_id, play_id) %>%  mutate(new_df = purrr::map(data, extract_receiver)) %>%
     select(-data)
   return(play)
 }
 
-
+extract_receiver <- function(play_dat){
+  
+  receivers_df <- play_dat %>% filter(offense,!team=="football") %>% unnest()
+  
+  defenders_df <- play_dat %>% filter(defense,!team=="football") %>% unnest()  
+  
+  
+  if(nrow(receivers_df)==0 | nrow(defenders_df)==0){
+    return(NA)
+  }
+  
+  qb_id <- receivers_df %>% filter(position=="QB") %>% slice(1) %>% pull(nfl_id)
+  
+  receivers_df <- receivers_df %>% filter(!position=="QB")
+  
+  if(length(qb_id)==0){
+    qb_id = NA
+  }
+  
+  receivers_df <- 
+    receivers_df %>% 
+    group_by(nfl_id) %>%
+    mutate(closest_defensive_player = 
+             purrr::map2_dbl(x, y,  ~ extract_location_at_pass_release(.x, .y, defenders_df)),
+           qb_id_f = qb_id)
+  
+  final_df =  receivers_df %>% select(nfl_id,team,display_name,closest_defensive_player,qb_id_f)
+  return(final_df)
+}
 
 extract_defender <- function(play_dat){
  
@@ -91,7 +132,10 @@ extract_location_at_pass_release <- function(ref_x,ref_y,off_df){
   
   ## pull minimum value id 
   min_id <- which.min(off_distance$dist_to_offense)
-  
-  closest_defender = off_distance$nfl_id[min_id]
-  return(closest_defender)
+  min_distance <- off_distance$dist_to_offense[min_id]
+  if(min_distance<=5){
+    closest_defender = off_distance$nfl_id[min_id]
+    return(closest_defender)
+  }
+  return(NA)
 }
