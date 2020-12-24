@@ -1,8 +1,8 @@
 create_train_data <- function(track_week_data, cp_data) {
-  browser()
+  #browser()
   
   cp_week_df <-
-    cp_data %>% select(game_id, play_id, nfl_id, frame_id, air_yards_x, air_dist, sideline_sep, .pred_C) %>%
+    cp_data %>% select(game_id, play_id, nfl_id, frame_id, air_yards_x, air_dist, rec_separation, sideline_sep, .pred_C) %>%
     rename(cp = .pred_C)
   
   week_x <-
@@ -29,6 +29,8 @@ create_train_data <- function(track_week_data, cp_data) {
       cp,
       air_yards_x,
       air_dist,
+      rec_separation,
+      sideline_sep,
       dis,
       dir,
       time,
@@ -49,6 +51,9 @@ create_train_data <- function(track_week_data, cp_data) {
     play_id,
     game_id,
     nfl_id,
+    yardline_side,
+    yardline_100,
+    half_seconds_remaining,
     team,
     display_name,
     offense,
@@ -58,8 +63,8 @@ create_train_data <- function(track_week_data, cp_data) {
   ) %>% group_by(game_id, play_id) %>% tidyr::nest()
   
   play <-
-    play_nest %>% group_by(game_id, play_id) %>%  mutate(new_df = purrr::map(data, extract_receiver)) %>%
-    select(-data)
+    play_nest %>% group_by(game_id, play_id) %>%  mutate(new_df = purrr::map(data, extract_receiver)) 
+  
   return(play)
 }
 
