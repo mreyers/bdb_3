@@ -67,7 +67,6 @@ new_zone_influence <- function(data){
   
   # Get possession team info
   poss_team <- my_play %>%
-    slice(1) %>%
     filter(position %in% c("QB", "WR", "RB", "TE")) %>%
     group_by(team) %>%
     summarize(n = n(), .groups = "drop") %>%
@@ -166,8 +165,12 @@ for(i in 1:17){
     nest(data = c(time, x, y, velocity, a, dis, o, dir, event, nfl_id, display_name, 
                   jersey_number, position, frame_id, team, play_direction, 
                   route)) %>%
-    mutate(inf_check = future_map(data, purrr::safely(new_zone_influence))) %>%
-    select(game_id, play_id, inf_check)
+    mutate(inf_check = future_map(data, purrr::safely(new_zone_influence)),
+           result = map(inf_check, . %>%
+                           magrittr::use_series(result)),
+           error = map(inf_check, . %>%
+                          magrittr::use_series(error))) %>%
+    select(game_id, play_id, result, error)
   tictoc::toc()
   
   saveRDS(holder, paste0("Data/additional_data/week", i, "_influence.rds"))

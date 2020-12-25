@@ -25,7 +25,7 @@ ep_for_receivers_exact <- function(all_frames_with_pbp, game_id_par, play_id_par
   if(dim(play_params)[1] == 0){
     View(c(game_id_par, play_id_par))
   }
-  initial_ep <- calculate_expected_points(play_params, "half_seconds_remaining",
+  initial_ep <- nflscrapR::calculate_expected_points(play_params, "half_seconds_remaining",
                                           "yardline_100", "down", "ydstogo", "goal_to_go")$ep
   # Store nfl_scrapr_playdata somewhere globally
   # Currently stored as nfl_2017_small
@@ -75,7 +75,7 @@ ep_for_receivers_exact <- function(all_frames_with_pbp, game_id_par, play_id_par
   # Some weird error popped up, seeing if as.numeric is sufficient to fix
   #Error: variable 'yrdline100' was fitted with type "numeric" but type "logical" was supplied
   
-  complete_ep <- calculate_expected_points(complete_params, "half_seconds_remaining",
+  complete_ep <- nflscrapR::calculate_expected_points(complete_params, "half_seconds_remaining",
                                            "new_yardline_100", "new_down", "new_ydstogo",
                                            "goal_to_go") %>%
     mutate(adj_comp_ep = ifelse(td_flag, 
@@ -97,7 +97,7 @@ ep_for_receivers_exact <- function(all_frames_with_pbp, game_id_par, play_id_par
     mutate(half_seconds_remaining = max(play_params$half_seconds_remaining - 7, 1),
            goal_to_go = play_params$goal_to_go)
   
-  incomplete_ep <- calculate_expected_points(failure_params, "half_seconds_remaining",
+  incomplete_ep <- nflscrapR::calculate_expected_points(failure_params, "half_seconds_remaining",
                                              "yardline_100", "new_down", "new_ydstogo",
                                              "goal_to_go") %>%
     mutate(adj_inc_ep = modifier * ep) %>%
@@ -119,7 +119,7 @@ ep_for_receivers_exact <- function(all_frames_with_pbp, game_id_par, play_id_par
     mutate(half_seconds_remaining = play_params$half_seconds_remaining,
            goal_to_go = as.numeric(yardline_100 < 10)) # turn over happened within own 10 yardline
   
-  interception_ep <- calculate_expected_points(interception_params, "half_seconds_remaining",
+  interception_ep <- nflscrapR::calculate_expected_points(interception_params, "half_seconds_remaining",
                                                "yardline_100", "down", "ydstogo", "goal_to_go") %>%
     mutate(adj_int_ep = if_else(td_flag, -7, -1 * ep)) %>%
     dplyr::select(adj_int_ep)
@@ -341,6 +341,7 @@ initial_ep <- nflscrapR::calculate_expected_points(play_params, "half_seconds_re
 # I need all of these covariates to do EP
   # For now I'll set YAC to 0 as we dont yet have a model for that
   # yards_downfield is just receiver_x - los, I have these x,y coords in all_preds
+all_preds <- readRDS("Data/cp_predictions/all_predictions.rds")
 all_preds_adj <- all_preds %>%
   left_join(ep_requirements %>% select(game_id, play_id,
                                        yardline_number, absolute_yardline_number),

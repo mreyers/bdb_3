@@ -92,6 +92,14 @@ week1_inf <- week1_inf %>%
   unnest(inf_check) %>%
   nest(-c(game_id, play_id, frame_id))
 
+unique_games <- tibble()
+for(i in 1:17){
+  temp <- readRDS(glue::glue("Data/additional_data/week{i}_influence.rds"))
+  unique_games <- unique_games %>%
+    bind_rows(temp %>% group_by(game_id, play_id) %>% slice(1) %>%
+                select(game_id, play_id) %>%
+                mutate(week = i))
+}
 # Actually it looks like I still need to convert these to covariates, currently 
 # just the pointwise ownership
 # Can do this with arrival_x and arrival_y from week1_simple and pair it with
@@ -134,26 +142,34 @@ sub_fn_bdb3 <- function(one_frame, influence){
   return(pass_time_results)
 }
 
+
+plays <- read_csv("Data/plays.csv", col_types = cols()) %>%
+  janitor::clean_names(case = "snake")
+
 possession_team <- plays %>%
   left_join(games %>% select(game_id, home_team_abbr)) %>%
   mutate(poss_team = if_else(possession_team == home_team_abbr, "home", "away")) %>%
   select(game_id, play_id, poss_team)
 
-for(i in 1:17){
+# New data has improved this, now only restrained by all_frames_covariates_weeki
+# Seems that set is missing a few observations but major improvement already
+for(i in 13:17){
   # Actual covariate setup because Im a jackass that forgot to condense influence
   # Will require a bit more preprocessing to finalize bc I need to go do something
   # and want to set this running
   
   week1_simple <- readRDS(paste0("Data/all_frames_covariates_week", i, ".rds"))
   
+  # This has 1034 observations (for i = 1), where obs = game_id, play_id
   week1_inf <- readRDS(paste0("Data/additional_data/week", i, "_influence.rds"))
+  
+  # This one has 495? Where am I losing plays?
+    # The plays are being lost in the influence calculation
+    # Go investigate there to unravel
   week1_inf_unnest <- week1_inf %>%
+    select(game_id, play_id, result) %>%
     # Double nested for some reason, this should work to unbind issue
-    unnest(inf_check) %>%
-    group_by(game_id, play_id) %>%
-    slice(1) %>%
-    ungroup() %>%
-    unnest(inf_check) %>%
+    unnest(result) %>%
     nest(-c(game_id, play_id, frame_id))
   
   week1_both <- week1_simple %>%
@@ -166,6 +182,9 @@ for(i in 1:17){
     mutate(ownership_summaries = map2(one_frame, influence,
                                       ~ sub_fn_bdb3(.x, .y)))
   
+  n_unique <- nrow(week1_both %>% group_by(game_id, play_id) %>% slice(1))
+  print(glue::glue("{n_unique} observations observed"))
+  
   week1_both_updated <- week1_both %>%
     mutate(null_check = map_dbl(ownership_summaries, ~ifelse(is.null(nrow(.)), 0, nrow(.)))) %>%
     filter(null_check > 0) %>%
@@ -177,26 +196,28 @@ for(i in 1:17){
   saveRDS(week1_both_updated, paste0("Data/simple_and_inf_covariates_week", i, ".rds"))
   
   print(i)
+  #rm(week1_simple, week1_inf, week1_inf_unnest)
 }
 
 # Quick sub step, I saved the wrong files
 # Just the last step is the issue
 
-for(i in 1:17){
-  one_week_covariates <- readRDS(paste0("Data/simple_and_inf_covariates_week", i, ".rds"))
-  week1_both_updated <- one_week_covariates %>%
-    mutate(null_check = map_dbl(ownership_summaries, ~ifelse(is.null(nrow(.)), 0, nrow(.)))) %>%
-    filter(null_check > 0) %>%
-    mutate(necessary_columns = map2(one_frame, ownership_summaries,
-                                    ~ .x %>% left_join(.y, by = "nfl_id"))) %>%
-    select(game_id, play_id, frame_id, necessary_columns) %>%
-    unnest(necessary_columns)
-  
-  saveRDS(week1_both_updated, paste0("Data/simple_and_inf_covariates_fix_week", i, ".rds"))
-}
+# for(i in 1:17){
+#   one_week_covariates <- readRDS(paste0("Data/simple_and_inf_covariates_week", i, ".rds"))
+#   week1_both_updated <- one_week_covariates %>%
+#     mutate(null_check = map_dbl(ownership_summaries, ~ifelse(is.null(nrow(.)), 0, nrow(.)))) %>%
+#     filter(null_check > 0) %>%
+#     mutate(necessary_columns = map2(one_frame, ownership_summaries,
+#                                     ~ .x %>% left_join(.y, by = "nfl_id"))) %>%
+#     select(game_id, play_id, frame_id, necessary_columns) %>%
+#     unnest(necessary_columns)
+#   
+#   saveRDS(week1_both_updated, paste0("Data/simple_and_inf_covariates_fix_week", i, ".rds"))
+# }
 
+# Saving the correct file now, dont need to use fix
 # 4. Apply the CP model to all frames (skipped step 3 for a second)
-one_week_covariates <- readRDS("Data/simple_and_inf_covariates_fix_week1.rds")
+one_week_covariates <- readRDS("Data/simple_and_inf_covariates_week1.rds")
 names(one_week_covariates)
 
 one_week_renamed <- one_week_covariates %>%
@@ -227,7 +248,7 @@ temp <- one_week_fixed_context %>%
 
 
 for(i in 1:17){
-  one_week_covariates <- readRDS(paste0("Data/simple_and_inf_covariates_fix_week",
+  one_week_covariates <- readRDS(paste0("Data/simple_and_inf_covariates_week",
                                         i,
                                         ".rds"))
   
@@ -414,6 +435,7 @@ basic_cpoe <- all_preds_with_defenders %>%
             .groups = "drop"
   )
 
+# 17377 plays involved in this, finally appropriate setup
 basic_cpoe %>% 
   filter(n_games > 10) %>%
   arrange(cpoe) %>%
@@ -482,6 +504,10 @@ value_attr %>%
   arrange(cpoe_controlled) %>%
   slice(1:20) %>% View()
 
+# 17674 plays
+value_attr %>%
+  summarize(n_plays = sum(nearest_rec_targeted))
+
 value_attr %>%
   ggplot(aes(x = cpoe, y = cpoe_controlled, size = nearest_rec_targeted)) +
   geom_point() +
@@ -543,12 +569,16 @@ all_preds_with_defenders_and_epa <- first_pass_ep_unnested %>%
          # no_yac should be complete_epa if caught, but allow run backs if picked
          no_yac_epa = if_else(pass_result == "C", complete_epa, observed_epa),
          # Would typically use observed_epa instead of no_yac but we only care about catch here
-         epa_allowed_above_hypothetical = no_yac_epa - hypothetical_epa)
+         epa_allowed_above_hypothetical = no_yac_epa - hypothetical_epa) %>%
+  # Problematic play, clearly something wrong in most calculations, gets duplicated a bunch
+  # Happens for 4 plays
+  filter(!(game_id == 2018092300 & play_id == 4480),
+         !(game_id == 2018091605 & play_id == 2715),
+         !(game_id == 2018120905 & play_id == 1426),
+         !(game_id == 2018121610 & play_id == 171))
 
 # Lets see some summaries
 ranked_2018_defenders <- all_preds_with_defenders_and_epa %>%
-  # Problematic play, clearly something wrong in most calculations, gets duplicated a bunch
-  filter(!(game_id == 2018092300 & play_id == 4480)) %>%
   group_by(defender_name) %>%
   summarize(defender = first(defender_name),
             n_games = length(unique(game_id)),
