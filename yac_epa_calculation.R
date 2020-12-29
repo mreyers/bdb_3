@@ -321,7 +321,7 @@ nfl_data <- read_csv("Data/plays.csv") %>%
          yardline_100 = if_else(is.na(yardline_100), 50, yardline_100),
          # Pseudo goal to go detector, yards_to_go can only satisfy if endzone is FD
          goal_to_go = if_else(yards_to_go >= yardline_100, 1, 0)
-         )
+  )
 
 ep_requirements <- nfl_data %>%
   arrange(game_id, play_id) %>%
@@ -342,64 +342,103 @@ ep_requirements <- nfl_data %>%
          absolute_yardline_number = if_else(is.na(absolute_yardline_number), 60, absolute_yardline_number))
 
 
-play_params <- ep_requirements %>%
-  filter(game_id == first(game_id), play_id == 75)
-
-# This function is from nflscrapR
-# devtools::install_github(repo = "maksimhorowitz/nflscrapR", force = TRUE)
-initial_ep <- nflscrapR::calculate_expected_points(play_params, "half_seconds_remaining",
-                                       "yardline_100", "down", "ydstogo", "goal_to_go")
-
 # I need all of these covariates to do EP
-  # For now I'll set YAC to 0 as we dont yet have a model for that
-  # yards_downfield is just receiver_x - los, I have these x,y coords in all_preds
-all_preds <- readRDS("Data/cp_predictions/all_predictions.rds")
-all_preds_adj <- all_preds %>%
+# For now I'll set YAC to 0 as we dont yet have a model for that
+# yards_downfield is just receiver_x - los, I have these x,y coords in all_preds
+all_preds_with_defenders <- readRDS("Data/yac/yac_preds.rds")
+all_preds_adj <- all_preds_with_defenders %>%
+  filter(nfl_id == target, frame_id == arrival_frame) %>%
   left_join(ep_requirements %>% select(game_id, play_id,
                                        yardline_number, absolute_yardline_number),
             by = c("game_id", "play_id")) %>%
   group_by(game_id, play_id) %>%
-  mutate(line_of_scrim_x = absolute_yardline_number) %>%
-  # Field goes from 10 to 110 in x, be wary
-    # This is fine, line_of_scrim_x is in the same units
-  mutate(n_qb_left = sum(dist_to_qb == 0 & x < line_of_scrim_x, na.rm = TRUE),
-         n_qb_right = sum(dist_to_qb == 0 & x > line_of_scrim_x, na.rm = TRUE),
-         direction_of_play = if_else(n_qb_left > n_qb_right,
-                                     "right",
-                                     "left")) %>%
   mutate(yards_downfield = case_when(
     direction_of_play %in% "right" ~ arrival_x - line_of_scrim_x,
     direction_of_play %in% "left" ~ line_of_scrim_x - arrival_x
-    ),
-    yards_downfield = ceiling(yards_downfield),
-    # Update yac later when we have it
-    yac = 0,
-    frame_id_2 = frame_id,
-    receiver = nfl_id) %>%
-  # De-select as I have these in a global object that I'll call in fn
-  select(-c(yardline_number, absolute_yardline_number))
+  ),
+  yards_downfield = ceiling(yards_downfield),
+  # Doing YAC part 1: 100% complete, 0 YAC, establishes baseline
+  .pred_C = 1,
+  .pred_I = 0,
+  yac_0 = 0,
+  frame_id_2 = frame_id,
+  receiver = nfl_id) %>%
+  ungroup()
 
-# ceiling(all_frames_with_pbp$yards_downfield),
-# yac = all_frames_with_pbp$yac,
-# frame_id_2 = all_frames_with_pbp$frame_id_2,
-# display_name = as.character(all_frames_with_pbp$display_name),
-# receiver = as.character(all_frames_with_pbp$receiver))
-
+# Slightly different approach, messed up yardlines previously
 # Ran in about 20 minutes, check results
-first_pass_ep <- all_preds_adj %>%
+first_pass_ep_no_yac <- all_preds_adj %>%
   ungroup() %>%
+  mutate(yac = yac_0) %>%
   #mutate(yac = yac_preds) %>%
   nest(-game_id, -play_id, -yardline_100, -ydstogo, -down) %>%
   #filter(game_id == first(game_id), play_id == first(play_id)) %>%
   mutate(ep_rec = pmap(list(data, game_id, play_id, yardline_100, ydstogo, down),
                        ~ep_for_receivers_exact(..1, ..2, ..3, ..4, ..5, ..6)))
 
+first_pass_ep_with_yac <- all_preds_adj %>%
+  ungroup() %>%
+  mutate(yac = yac_pred) %>%
+  # Think I was hitting some fractional problems
+  mutate(yac = if_else(is.na(yac), 0, round(yac))) %>%
+  nest(-game_id, -play_id, -yardline_100, -ydstogo, -down) %>%
+  #filter(game_id == first(game_id), play_id == first(play_id)) %>%
+  mutate(ep_rec = pmap(list(data, game_id, play_id, yardline_100, ydstogo, down),
+                       ~ep_for_receivers_exact(..1, ..2, ..3, ..4, ..5, ..6)))
 
-first_pass_ep_unnested <- first_pass_ep %>%
+first_pass_ep_unnested_no_yac <- first_pass_ep_no_yac %>%
   mutate(check_join = map2(data, ep_rec, ~ .x %>% mutate(receiver = as.character(receiver)) %>%
-                             left_join(.y %>% select( -yac, -down, -ydstogo),
+                             left_join(.y,
                                        by = c("frame_id_2", "receiver", "display_name")))) %>%
   select(-c(data, ep_rec)) %>%
   unnest(check_join)
 
-saveRDS(first_pass_ep_unnested, "Data/updated_first_pass_ep.rds")
+first_pass_ep_unnested_with_yac <- first_pass_ep_with_yac %>%
+  mutate(check_join = map2(data, ep_rec, ~ .x %>% mutate(receiver = as.character(receiver)) %>%
+                             left_join(.y,
+                                       by = c("frame_id_2", "receiver", "display_name")))) %>%
+  select(-c(data, ep_rec)) %>%
+  unnest(check_join)
+
+# Join these together
+first_pass_ep_yac_both <- first_pass_ep_unnested_with_yac %>%
+  left_join(first_pass_ep_unnested_no_yac %>% select(game_id, play_id,
+                                                     frame_id_2,
+                                                     no_yac_ep = adj_comp_ep,
+                                                     no_yac_epa = complete_epa))
+
+# This check returns about 150 observations
+  # I would expect it to return almost 0 but relative to 16k, this is small
+  # Additionally, the differences in EPA seem to be <= 0.2 for the most part
+first_pass_ep_yac_both %>% filter(yac >= 0 & no_yac_epa > complete_epa) %>% View()
+
+# Save the data
+saveRDS(first_pass_ep_yac_both, "Data/yac/first_pass_ep_unnested_with_yac.rds")
+
+# # # # # # 
+# End Script
+# # # # # #
+
+
+test_df <- data.frame(half_seconds_remaining = 1464,
+                      yards_to_go = c(4, 2, 10), 
+                      yard_line_100 = c(92, 90, 84), down = c(3, 4, 1), goal_to_go = 0)
+nflscrapR::calculate_expected_points(test_df, "half_seconds_remaining",
+                                     "yard_line_100", "down", "yards_to_go", "goal_to_go")
+
+test_grid <- expand.grid(half_seconds_remaining = 1000,
+                         goal_to_go = 0,
+                         ydstogo = 10,
+                         yardline_100 = 1:99,
+                         down = 1:4)
+initial_ep <- nflscrapR::calculate_expected_points(test_grid, "half_seconds_remaining",
+                                                   "yardline_100", "down", "ydstogo", "goal_to_go")$ep
+
+# The model clearly works, I must be breaking something in an update step
+  # Nowhere here do I have a play in which having fewer yards on a later down is better
+  # The only weirdness might come from down and distance changes
+  # Continue to review
+test_grid %>%
+  mutate(ep = initial_ep) %>%
+  ggplot(aes(x = yardline_100, y = ep, group = down, col = down)) +
+  geom_line()

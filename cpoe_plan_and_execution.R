@@ -449,12 +449,17 @@ qb_play <- all_preds %>%
   filter(!is.na(position)) %>%
   select(game_id, play_id, qb_id = nfl_id)
 
+# Add low threshold modification due to selection bias inherent in sports
 all_preds_with_defenders_and_qbs <- all_preds_with_defenders %>%
   left_join(qb_play, by = c("game_id", "play_id")) %>%
+  group_by(defender_id) %>%
+  mutate(n_targets = n(),
+         modified_def_id = if_else(n_targets < 30, 99999, defender_id)) %>%
+  ungroup() %>%
   mutate(pass_result_bin = if_else(pass_result %in% "C", 1, 0),
          qb_id_f = factor(qb_id),
          target_id_f = factor(nfl_id),
-         defender_id_f = factor(defender_id),
+         defender_id_f = factor(modified_def_id),
          logit_pred_c = case_when(.pred_C < 0.01 ~ log(0.01 / 0.99),
                                   .pred_C > 0.99 ~ log(0.99 / 0.01),
                                   TRUE ~ log(.pred_C / (1 - .pred_C))))
@@ -495,13 +500,14 @@ value_attr <- all_preds_with_defenders_and_qbs %>%
             comp_perc_allowed = nearest_rec_completed / nearest_rec_targeted,
             exp_comp_perc_allowed = mean(.pred_C),
             exp_comp_perc_allowed_given_players = mean(pred_c_no_def),
-            cpoe = sum(as.numeric(pass_result == "C") - .pred_C),
-            cpoe_controlled =  sum(as.numeric(pass_result == "C") - pred_c_no_def),
+            cpoe = comp_perc_allowed - exp_comp_perc_allowed,
+            cpoe_controlled =  comp_perc_allowed - exp_comp_perc_allowed_given_players,
             .groups = "drop"
   )
 
 value_attr %>%
   arrange(cpoe_controlled) %>%
+  filter(nearest_rec_targeted > 30) %>%
   slice(1:20) %>% View()
 
 # 17674 plays
@@ -543,7 +549,8 @@ target_skills <- skill_measures$target_id_f[,,1] %>%
 
 # 7. Estimate value per frame using Hypothetical EPA
   # Going to source this one ine from ep_calculation.R
-first_pass_ep_unnested <- readRDS("Data/first_pass_ep.rds")
+  # New file name
+first_pass_ep_unnested <- readRDS("Data/updated_first_pass_ep.rds")
 
 # 8. Assign value per frame based on Hypothetical EPA, the CP * EPA hybrid from thesis
 act_epa <- read_csv("Data/plays.csv") %>%
@@ -565,11 +572,14 @@ all_preds_with_defenders_and_epa <- first_pass_ep_unnested %>%
   filter(frame_id == throw_frame) %>%
   left_join(act_epa, by = c("game_id", "play_id")) %>%
   left_join(join_holder, by = c("game_id", "play_id", "nfl_id")) %>%
+  filter(!is.na(pred_c_no_def)) %>%
   mutate(hypothetical_epa = pred_c_no_def * complete_epa + (1 - pred_c_no_def) * incomplete_epa,
          # no_yac should be complete_epa if caught, but allow run backs if picked
-         no_yac_epa = if_else(pass_result == "C", complete_epa, observed_epa),
+         no_yac_epa = if_else(pass_result == "C", complete_epa, incomplete_epa), # observed_epa
+         no_yac_with_runback_epa = if_else(pass_result == "C", complete_epa, observed_epa),
          # Would typically use observed_epa instead of no_yac but we only care about catch here
-         epa_allowed_above_hypothetical = no_yac_epa - hypothetical_epa) %>%
+         epa_allowed_above_hypothetical_no_runback = no_yac_epa - hypothetical_epa,
+         epa_allowed_above_hypothetical_with_runback = no_yac_with_runback_epa - hypothetical_epa) %>%
   # Problematic play, clearly something wrong in most calculations, gets duplicated a bunch
   # Happens for 4 plays
   filter(!(game_id == 2018092300 & play_id == 4480),
@@ -587,11 +597,35 @@ ranked_2018_defenders <- all_preds_with_defenders_and_epa %>%
             comp_perc_allowed = nearest_rec_completed / nearest_rec_targeted,
             exp_comp_perc_allowed = mean(.pred_C),
             exp_comp_perc_allowed_given_players = mean(pred_c_no_def),
-            cpoe = sum(as.numeric(pass_result == "C") - .pred_C),
-            cpoe_controlled =  sum(as.numeric(pass_result == "C") - pred_c_no_def),
-            tot_epa_allowed_above_exp = sum(epa_allowed_above_hypothetical),
+            def_success_rate = sum(observed_epa < 0) / n(),
+            def_success_rate_against_avg_no_runback = 
+              sum(epa_allowed_above_hypothetical_no_runback < 0) / n(),
+            def_success_rate_against_avg_runback = 
+              sum(epa_allowed_above_hypothetical_with_runback < 0) / n(),
+            cpoe = round(comp_perc_allowed - exp_comp_perc_allowed, 4),
+            cpoe_controlled =  round(comp_perc_allowed - exp_comp_perc_allowed_given_players, 4),
+            tot_epa_allowed_above_exp_no_runback = sum(epa_allowed_above_hypothetical_no_runback),
+            tot_epa_allowed_above_exp_with_runback = sum(epa_allowed_above_hypothetical_with_runback),
             .groups = "drop") %>%
-  arrange(tot_epa_allowed_above_exp)
+  arrange(tot_epa_allowed_above_exp_with_runback)
+
+ranked_2018_defenders %>%
+  summarize(tot_epa_allowed = sum(tot_epa_allowed_above_exp_with_runback),
+            tot_epa_no_runback = sum(tot_epa_allowed_above_exp_no_runback))
+
+ranked_2018_defenders %>%
+  pivot_longer(cols = contains("tot_epa_allowed"),
+               names_to = "metric",
+               values_to = "value") %>%
+  ggplot(aes(x = value)) +
+  geom_histogram() +
+  facet_wrap(~metric, scales = "free_x")
+
+# What if instead of doing it on completion probability I did this all with epa
+  # Would give a more normal distribution about EPA gain
+  # Might standardize value allocation
+  # Also moves away from the full allocation scheme that Dani mentioned
+# Nope, this was a bad idea, do not pursue
 
 # 9. Upweight plays corresponding to large +/-WPA moments through scale_factors.R
   # Actually cant do that, we cant use the WPA data available in the nflfastR data

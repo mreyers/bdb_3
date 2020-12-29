@@ -155,6 +155,10 @@ saveRDS(all_preds_with_defenders, "Data/yac/covariates.rds")
   # Actually, I dont need to have an answer for this right now, I can still build
   # YAC model without knowing this.
 # Skip over to go write a model tuning script for this
+yac_preds_results <- readRDS("Data/yac/yac_preds.rds")
 
-# Eventually come back and use tracking elements to identify the nearest defender when
-# a tackle / out of bounds event occurs
+# Need to get the EPA associated with these plays now
+# After will need to combine with CPOE
+# I think I will have to do this 2 ways
+# Modify completion probability to be 100 percent, use YAC = 0 and YAC = estimate
+# Call YAC EPA to be EPA(estimate) - EPA(0)

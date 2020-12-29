@@ -55,7 +55,7 @@ ep_requirements <- nfl_data %>%
 
 # Need to extract some play level information from all preds as I have condensed things a bit
 # for defenders
-all_preds <- readRDS("Data/all_predictions.rds")
+all_preds <- readRDS("Data/cp_predictions/all_predictions.rds")
 all_preds_direction <- all_preds %>%
   left_join(ep_requirements %>% select(game_id, play_id,
                                        yardline_number, absolute_yardline_number),
@@ -141,12 +141,22 @@ simple_yac <- lmer(offense_yac ~ logit_comp + rec_separation + velocity +
 
 summary(simple_yac)
 
-# Estimate expected yards after catch per play
-yac_preds <- predict(simple_yac, re.form = NA)
+# Full pred set
+defender_yac_setup_all <- all_preds_defenders_yac %>%
+  mutate(logit_comp = case_when(.pred_C < 0.01 ~ log(0.01 / 0.99),
+                                .pred_C > 0.99 ~ log(0.99 / 0.01),
+                                TRUE ~ log(.pred_C / (1 - .pred_C))),
+         yards_to_endzone_at_catch = yardline_100 - yards_downfield,
+         defender_id_f = factor(defender_id))
+
+yac_preds <- predict(simple_yac, defender_yac_setup_all, re.form = NA)
 
 # Bring it together
-defender_yac_preds <- defender_yac_setup %>%
+defender_yac_preds <- defender_yac_setup_all %>%
   mutate(yac_pred = yac_preds)
+
+# Store results
+saveRDS(defender_yac_preds, "Data/yac/yac_preds.rds")
 
 # Lets see what a summary result looks like
 defender_yac_preds %>%
@@ -156,4 +166,5 @@ defender_yac_preds %>%
             tot_yac = sum(offense_yac),
             tot_off_yacoe = sum(offense_yac - yac_pred),
             tot_yacoe = sum(overall_yac - yac_pred)) %>%
-  arrange(desc(tot_yacoe))
+  arrange(desc(tot_yacoe)) %>%
+  View()
