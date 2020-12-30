@@ -397,7 +397,7 @@ first_pass_ep <- all_preds_adj %>%
 
 first_pass_ep_unnested <- first_pass_ep %>%
   mutate(check_join = map2(data, ep_rec, ~ .x %>% mutate(receiver = as.character(receiver)) %>%
-                             left_join(.y %>% select( -yac, -down, -ydstogo),
+                             left_join(.y,
                                        by = c("frame_id_2", "receiver", "display_name")))) %>%
   select(-c(data, ep_rec)) %>%
   unnest(check_join)

@@ -162,3 +162,20 @@ yac_preds_results <- readRDS("Data/yac/yac_preds.rds")
 # I think I will have to do this 2 ways
 # Modify completion probability to be 100 percent, use YAC = 0 and YAC = estimate
 # Call YAC EPA to be EPA(estimate) - EPA(0)
+first_pass_ep_yac_both <- readRDS("Data/yac/first_pass_ep_unnested_with_yac.rds")
+
+# Check summary results
+first_pass_ep_yac_both %>%
+  mutate(value_of_predicted_yac = complete_epa - no_yac_epa) %>%
+  ggplot(aes(x = value_of_predicted_yac)) + geom_histogram()
+
+# Still need yac observed and the EPA associated with that which I guess
+# is just observed_epa - complete_epa
+player_summary_yac <- first_pass_ep_yac_both %>%
+  mutate(value_of_predicted_yac = complete_epa - no_yac_epa) %>%
+  group_by(defender_id, defender_name) %>%
+  summarize(avg_yac_value_allowed = mean(value_of_predicted_yac)) %>%
+  arrange(desc(avg_yac_value_allowed))
+# Note: I think that completions + interceptions should be valued together,
+# incompletions valued alone. The completions and interceptions rely on end of
+# play results while the incompletions just rely on the ball not being caught

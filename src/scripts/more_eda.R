@@ -34,6 +34,7 @@
 # # # #
 library(tidyverse)
 library(mvtnorm)
+library(futile.logger)
 source("src/utils/tracking_helpers.R")
 
 one_week <- read_csv("Data/week1.csv") %>%

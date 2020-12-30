@@ -587,6 +587,8 @@ all_preds_with_defenders_and_epa <- first_pass_ep_unnested %>%
          !(game_id == 2018120905 & play_id == 1426),
          !(game_id == 2018121610 & play_id == 171))
 
+saveRDS(all_preds_with_defenders_and_epa, "Data/all_preds_with_defenders_and_epa.rds")
+
 # Lets see some summaries
 ranked_2018_defenders <- all_preds_with_defenders_and_epa %>%
   group_by(defender_name) %>%
