@@ -30,7 +30,7 @@ complete_intercept_value <- complete_intercept %>%
   mutate(yac_epa_est = if_else(is.na(yac_epa_est), 0, yac_epa_est),
          no_yac_epa_est = if_else(is.na(no_yac_epa_est), 0, no_yac_epa_est),
          just_the_yac_epa = yac_epa_est - no_yac_epa_est,
-         play_value_est = (complete_epa + just_the_yac_epa),
+         play_value_est = pred_c_no_def * (complete_epa + just_the_yac_epa),
          play_value_over_est = observed_epa - play_value_est)
 
   # On incompletions though the value is 0 unless probability is included and should be
@@ -57,12 +57,12 @@ complete_intercept_value %>% group_by(defender_id) %>%
   # Adding in the 0 columns to allow row binding while also indicating what is not used
 complete_intercept_value_reduced <- complete_intercept_value %>%
   select(game_id, play_id, pass_result, defender_id, defender_name,
-         pred_c_no_def, complete_epa, incomplete_epa = 0, yac_epa_est, observed_epa,
+         pred_c_no_def, complete_epa, incomplete_epa = 0, just_the_yac_epa, observed_epa,
          play_value_est, play_value_over_est)
 
 incomplete_value_reduced <- incomplete_value %>%
   select(game_id, play_id, pass_result, defender_id, defender_name,
-         pred_c_no_def, complete_epa = 0, incomplete_epa, yac_epa_est = 0, observed_epa,
+         pred_c_no_def, complete_epa = 0, incomplete_epa, just_the_yac_epa = 0, observed_epa,
          play_value_est, play_value_over_est)
 
 all_value_reduced <- complete_intercept_value_reduced %>%
@@ -85,5 +85,52 @@ all_values_summarized %>%
   View()
 
 all_values_summarized %>%
+  ggplot(aes(x = total_play_value_est, y = total_play_value_observed)) +
+  geom_point() +
+  geom_vline(data = all_values_summarized %>%
+               summarize(mean_pred = mean(total_play_value_est)),
+             aes(xintercept = mean_pred), col = "red") +
+  geom_hline(data = all_values_summarized %>%
+               summarize(mean_obs = mean(total_play_value_observed)),
+             aes(yintercept = mean_obs), col = "red") +
+  xlab("Predicted EPA Surrendered") + ylab("Observed EPA Surrendered") +
+  ggtitle("Observed vs Predicted EPA Surrendered When Nearest Defender") +
+  theme_bw()
+
+
+all_values_summarized %>%
   ggplot(aes(x = total_play_value_over_est)) +
   geom_histogram()
+
+war_benchmarks <- all_values_summarized %>%
+  summarize(avg_value_over_est = mean(total_play_value_over_est),
+            # Need to do this one backwards because negative is good
+            tenth_percentile_over_est = quantile(total_play_value_over_est, 0.9))
+
+# Now a WAR plot
+war_options <- all_values_summarized %>%
+  mutate(total_war_per_384 = -1 * total_play_value_over_est / 38.4,
+         total_war_per_avg = -1 * (total_play_value_over_est - war_benchmarks$avg_value_over_est) / 38.4,
+         total_war_per_tenth = -1 * (total_play_value_over_est - war_benchmarks$tenth_percentile_over_est) / 38.4)
+
+saveRDS(war_options, "Data/war_options.rds")
+
+war_options %>%
+  ggplot() +
+  geom_density(aes(x = total_war_per_384, col = "per_384")) +
+  geom_density(aes(x = total_war_per_avg, col = "per_avg")) +
+  geom_density(aes(x = total_war_per_tenth, col = "per_tenth")) +
+  theme_bw() +
+  ggtitle("Wins Options")
+
+# Additional consideration for replacement level:
+  # 11 defenders on play, 11 - n_pass_rushers are in coverage
+  # Identify average number of coverage players, multiply by number of teams, use as cutoff
+plays_essential %>%
+  summarize(avg_pass_rushers = mean(number_of_pass_rushers, na.rm = TRUE),
+            avg_coverage = 11 - avg_pass_rushers,
+            n_starters = avg_coverage * 32)
+
+
+all_values_summarized %>%
+  summarize(corr = cor(total_play_value_est, total_play_value_observed))
