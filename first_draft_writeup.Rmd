@@ -1,0 +1,50 @@
+---
+title: "Defensive Player Evaluation in the 2018 NFL Season"
+author: "The Squad"
+date: "12/30/2020"
+output: html_document
+---
+
+## The NFL in 2018
+Fans in the stands. Missed pass interference. A defensive struggle. Any of these phrases would surely invoke some nostalgia among fans of the game in 2018, be it the physical presence of being at a game, the non-call in the NFC Championship, or the lowest scoring Super Bowl ever observed. It was a year of excitement and one that we may still be a year or more away from replicating. Fortunately, however, we can relive the glory of this season in our spreadsheets. 
+
+2018 continued a year over year trend of increased offensive scoring. According to Pro Football Reference, a team would on average score 23.3 points per game in 2018 instead of 21.3 points per game in 1998. Relatedly, this point increase has coincided with a passing game renaissance. Raw completion percentage is up almost 10 percentage points over this same interval, as well as passing attempts and passing yards per game. It would be hard for even the grungiest of 'Old School' fans to deny the transition of the NFL into that of a passing league.
+
+Despite this transition, it has been a consistent challenge to evaluate the players responsible for limiting this shift: the defence. Perhaps some of this is due to the rise of Fantasy Football and the obsession with easily countable stats on the offensive side of the ball. Defenders seem to lack these same stats in passing plays, limited to the comparatively rare events of pass break ups and interceptions. This glosses over other relevant factors to highlight the point that defenders are under-evaluated.
+
+## Approach
+Our evaluation of defenders will feel similar to that of other sports defensive evaluation. We will identify components of a play that we feel can be partitioned and performance measured. Within each of these partitions, we will build models to define what would be expected in each case. From these expectations we will calculate the difference between observation and expectation, assigning value based on these differences. Finally, we will translate value from each partition into a similar currency for overall player evaluation.
+
+From our perspective of partitions, we will break plays down into 3 main groups. Each partition is reliant on the nearest defender to a given receiver and is written from their perspective.
+
+- Was a receiver with a given nearest defender targeted?
+- Given that a receiver with a given nearest defender was targeted, was the target converted into a completion?
+- Given that the target was converted into a completion, was the receiver able to progress down field beyond the location of completion?
+
+As these bullet points are a smidge convoluted, we re-brand these topics to be Deterrence, Pass Coverage, and Pursuit.
+
+### Deterrence
+Recently Pro Football Focus, one of the few sources that have actively worked on defensive player evaluation, has come under fire for the method in which they grade coverage. Grades are only assigned on reps in which the covered receiver was targeted. Though necessary for time saving on their side, this leaves an enormous selection bias on where grades are earned. The most obvious question to be asked is why was the receiver targeted and why not another? Perhaps the coverage on the targeted receiver was worse than the coverage provided by other defenders on the same play? Examples of such could be found in Richard Sherman's 2018 campaign or, for a more modern example, Jalen Ramsey's 2020 campaign. There are of course other examples but with most of us being Seahawks fans, these two stand out the furthest.
+
+We aim to account for the value added in deterrence. Our work will model the likelihood of each receiver being targeted on a play given contextual features and completion probability (as per the work of Reyers & Swartz 2020). From this we derive value in the prevention of targets.
+
+### Pass Coverage
+Perhaps ambitiously titled pass coverage, this section aims to value plays in which the defender in question is nearest to the targeted receiver at the time of pass release. This is distinct from deterrence as the defender can no longer prevent a target from being accrued and is now tasked with stopping the completion. Three outcomes are possible here between completion, incompletion, and interception.
+
+We again will utilize completion probability as per the previously cited work. Given this probability, we compare the result of the play at the point of arrival. A completion takes away value based on how unlikely the catch was, an incompletion or interception adds value. Due to our partitions, completions are treated as ending at the point of catch, allowing yards after catch to fall into our pursuit category.
+
+### Pursuit
+After a catch is made, damage can still be mitigated by defenders if they are to stop the receiver's progress. Calculating how much progress is to be expected differs sufficiently from coverage to partition pursuit away from pass coverage.
+
+Explanation as to the modeling used for the yards after catch approach can again be found in Reyers & Swartz. We again compare the observed value of the play with the estimated value, crediting defenders when they hold a receiver at or below the expectation for the given play.
+
+## Value
+A key driver of evaluating players is of course deriving a value metric. As per the work of Yurko et al. (nflWAR), we recognize that Expected Points Added (EPA) is a useful tool with which to evaluate players and that the accumulation of approximately 38.4 EPA is roughly equivalent to 1 Win. We can then calculate the value add for players in each of our 3 key facets via either EPA or Wins.
+
+Each component starts with the estimation of EPA on each rep and eventually translates these values to wins. EPA is estimated for each component through the nflscrapR Expected Points model. All frames receive an expected points estimate if the pass were to be complete, incomplete, or intercepted as well as receiving an estimate solely for the value of the yards after catch.
+
+## Diagnostics
+Here we can add the Completion Probability calibration plot, the yards after catch diagnostics, and any other relevant measures to ensure model efficacy.
+
+## Results
+Here we can add results either by section or overall, depending on how much space we have already used and what we are interested in highlighting.
