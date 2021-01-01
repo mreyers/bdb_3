@@ -1,3 +1,7 @@
+# Need data in main folder named week1, week2 etc
+# Need define_pc2R in main folder
+# Need targetedReceiver.csv in main folder
+
 set.seed(3459)
 #libraries
 library(tidyverse)
@@ -7,9 +11,7 @@ plays <- read_csv("plays.csv")
 players <- read_csv("players.csv")
 games <- read_csv("games.csv")
 
-files <- 
-  tibble(files = list.files()) %>%
-  filter(str_detect(files, "^week\\d{1,2}\\.csv"))   
+source("define_pc2.R")
 
 tracking_data <- 
   read_csv("week1.csv") %>%
@@ -187,7 +189,7 @@ p6 <- ggplot() +
   geom_segment(data = testing_data, aes(x = x, y = y, xend = x + s * sin(theta), yend = y  + s* cos(theta), colour = team),
                size = 1, arrow = arrow(length = unit(0.01, "npc"))) +
   geom_point(data = testing_data, aes(x = x, y = y, colour = team), size = 3) +
-  geom_point(data = arrival, aes(x = x, y = y, colour = team), size = 3) +
+  #geom_point(data = arrival, aes(x = x, y = y, colour = team), size = 3) +
   geom_text(data = testing_data, aes(x = x, y = y, label = nflId, vjust = 1), size = 3) +
   scale_colour_manual(values = c("gold", "black"), breaks = c("home", "away")) +
   #ball location
@@ -209,7 +211,7 @@ testing_data %>%
   geom_segment(data = testing_data %>% filter(nflId == 2540202), aes(x = x, y = y, xend = s*sin(theta) + x, yend = s*cos(theta) + y, colour = team),
                size = 1, arrow = arrow(length = unit(0.01, "npc"))) +
   geom_point(data = testing_data %>% filter(nflId == 2540202), aes(x = x, y = y, colour = team), size = 3) +
-  geom_point(data = arrival %>% filter(nflId == 2540202), aes(x = x, y = y), size = 3) +
+  #geom_point(data = arrival %>% filter(nflId == 2540202), aes(x = x, y = y), size = 3) +
   scale_fill_gradient2(low = "blue", high = "red", mid = "white") +
   facet_wrap(~ nflId + team) +
   coord_fixed()
@@ -218,56 +220,165 @@ testing_data %>%
   select(time, next_time, ball_x, ball_y, ball_dist, x, y, s, theta, nflId, team) %>% 
   #run func
   pmap_df(., calc_PC2, pitch_area = pitch) %>%
-  filter(I > 0.001) 
+  filter(I > 0.001) %>%
   ggplot() +
   geom_tile(aes(x = x, y = y, fill = I), alpha = 0.7)  +
   geom_segment(data = testing_data, aes(x = x, y = y, xend = s*sin(theta) + x, yend = s*cos(theta) + y, colour = team),
                size = 1, arrow = arrow(length = unit(0.01, "npc"))) +
   geom_point(data = testing_data, aes(x = x, y = y, colour = team), size = 3) +
-  geom_point(data = arrival, aes(x = x, y = y), size = 3) +
+  #geom_point(data = arrival, aes(x = x, y = y), size = 3) +
   scale_fill_gradient2(low = "blue", high = "red", mid = "white") +
   facet_wrap(~ nflId + team) +
   coord_fixed()
-  
-
-library(Rcpp)
-library(RcppArmadillo)
-
-sourceCpp("pitch_control.cpp")
 
 
-# ugly packaged up function
-calc_PC_cpp <- function(time, next_time, ball_x, ball_y, x, y, next_x, next_y, team, player, pitch_area) {
-  #blargh terribly written- run out of energy to improve
-  pitch_area$I <- calc_I_cpp(c(x, y), c(next_x, next_y), c(ball_x, ball_y), time, next_time, as.matrix(pitch_area), t(c(x, y)))
-  pitch_area$team <- team
-  pitch_area$time <- time
-  pitch_area$player <- player
-  return(pitch_area)
-}
 
-#sample 10 seconds worth of data
-animation_data <- tracking_data %>%
-  filter(time %in% 600:610) %>%
-  dplyr::select(time, next_time, ball_x, ball_y, x, y, next_x, next_y, team, player) 
 
-#run the function over the data
-anim_pitch_control <- animation_data %>%
-  #run func
-  pmap_df(., calc_PC_cpp, pitch_area = pitch) %>%
-  #sum by team and area
-  group_by(team, x, y, time) %>%
-  summarise(team_sum = sum(I)) %>%
-  pivot_wider(names_from = team, values_from = team_sum) %>%
-  #σ - logistic function
-  mutate(PC = 1 / (1 + exp(Home_Team - Away_Team)))
+# Space Generation --------------------------------------------------------
 
-#plot
-p7 <- ggplot(anim_pitch_control, aes(x = x, y = y, colour = PC)) +
-  annotate_pitch(dimensions = pitch_statsbomb) +
-  geom_point(alpha = 0.7, shape = 15) +
-  scale_colour_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0.5) +
-  theme_pitch() +
-  labs(title = "pitch control rasters by match time (s)") +
-  facet_wrap(~time)
-p7
+# GO RUN SPACE GENERATION FILE
+# 
+# big_testing_data <- nfl_tracking_data %>%
+#   filter(playId == 3264, gameId == 2018090903, frameId >= 11, frameId <= 45)
+# 
+# PC <- 
+#   big_testing_data %>%
+#   select(time, next_time, ball_x, ball_y, ball_dist, x, y, s, theta, nflId, team) %>% 
+#   #run func
+#   pmap_df(., calc_PC2, pitch_area = pitch) %>%
+#   filter(I > 1e-10) %>%
+#   group_by(time, x, y, team) %>%
+#   filter(I == max(I)) %>%
+#   group_by(time, x, y) %>%
+#   mutate(PC = 1/ ( 1 + exp(max(I) - min(I))),
+#          PC = if_else(team == "home", PC, 1 - PC)) %>%
+#   filter(I == max(I))
+# 
+# pitch_control_more <- 
+#   PC %>%
+#   mutate(yard_gain = (x - 28.2 - 10)/(100 - 28.2),
+#          Q = yard_gain * PC)
+# 
+# pitch_control_more2 <- 
+#   PC %>%
+#   #filter(time %in% c(1.5, 2.5, 3.5, 4.5)) %>%
+#   #filter(PC < 0.49 | PC > 0.51) %>%
+#   mutate(yard_gain = (x - 28.2 - 10)/(100 - 28.2),
+#          Q = yard_gain * PC) 
+# 
+#   
+# ggplot() +
+#   #pitch layout background
+#   #annotate_pitch(dimensions = pitch_statsbomb) +
+#   #pitch control raster
+#   #geom_tile(data = pitch_control_more2, aes(x = x, y = y, fill = PC), alpha = 0.7) +
+#   #scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0.5) +
+#   #players for each team
+#   #also add in little vector arrows
+#   geom_segment(data = big_testing_data, aes(x = x, y = y, xend = x + s * sin(theta), yend = y  + s* cos(theta), colour = team),
+#                size = 1, arrow = arrow(length = unit(0.01, "npc"))) +
+#   geom_point(data = big_testing_data, aes(x = x, y = y, colour = team), size = 3) +
+#   #geom_point(data = arrival, aes(x = x, y = y, colour = team), size = 3) +
+#   #geom_text(data = big_testing_data, aes(x = x, y = y, label = nflId, vjust = 1), size = 3) +
+#   scale_colour_manual(values = c("gold", "black"), breaks = c("home", "away")) +
+#   #ball location
+#   geom_point(data = ball_location, aes(x = ball_x, y = ball_y),
+#              colour = "black", fill = "white", shape = 21, size = 2.5, stroke = 2) +
+#   labs(title = "Mu based on distance to ball") +
+#   coord_fixed() +
+#   facet_wrap(~ time)
+# 
+# 
+# 
+# 
+# dQ <- 
+#   pitch_control_more %>%
+#   group_by(team, time, nflId) %>%
+#   summarise(sQ = sum(Q)) %>%
+#   group_by(team, nflId) %>%
+#   mutate(dQ = sQ - lag(sQ))
+#   
+# 
+# library(slider)
+# epsilon <- 1
+# 
+# 
+# soGL <- 
+#   dQ %>%
+#   mutate(G = slide_dbl(dQ, ~ mean(., na.rm = T), .after = 5),
+#          SOG = if_else(G < epsilon, 0, G),
+#          SOL = if_else(G > -epsilon, 0, G))
+# 
+# soGL_joined <-
+#   soGL %>%
+#   left_join(big_testing_data, by = c("team", "time", "nflId")) %>%
+#   select(team, time, nflId, G, SOG, SOL, x, y, next_x, next_y, s, a, dis, o, dir, event)
+# 
+# delta <- 20
+# 
+# soGL_joined %>%
+#   filter(team == "home")%>%
+#   left_join(., ., by = c("team", "time", "event"), suffix = c("", "_ip")) %>%
+#   filter(nflId != nflId_ip) %>%
+#   left_join(soGL_joined %>% filter(team == "away"), by = c("time", "event"), suffix = c("", "_j")) %>%
+#   filter(nflId == 2550272, nflId_ip == 2540202, nflId_j == 2555158) %>%
+#   
+#   mutate(sqrt((x_ip - x_j)^2 + (y_ip - y_j)^2),
+#          sqrt((next_x - x_j)^2 + (next_y - y_j)^2),
+#          sqrt((next_x_ip - next_x_j)^2 + (next_y_ip - next_y_j)^2)) %>% View
+#   mutate(SGG_i_ip = if_else(G_ip > epsilon, G_ip, 0)) %>%
+#   group_by(nflId, nflId_ip, nflId_j) %>%
+#   summarise(s = sum(SGG_i_ip)) %>%
+#   arrange(desc(s))
+#   
+# soGL %>% group_by(nflId, team) %>%
+#   summarise(SOG_n = sum(SOG >0),
+#             SOL_n = sum(SOL < 0),
+#             SOG_sum = sum(SOG),
+#             SOL_sum = sum(SOL),
+#             SOG_mean = mean(SOG),
+#             SOL_mean = mean(SOL)) %>%
+#   arrange(team, -SOG_sum)
+# 
+# 
+# library(Rcpp)
+# library(RcppArmadillo)
+# 
+# sourceCpp("pitch_control.cpp")
+# 
+# 
+# # ugly packaged up function
+# calc_PC_cpp <- function(time, next_time, ball_x, ball_y, x, y, next_x, next_y, team, player, pitch_area) {
+#   #blargh terribly written- run out of energy to improve
+#   pitch_area$I <- calc_I_cpp(c(x, y), c(next_x, next_y), c(ball_x, ball_y), time, next_time, as.matrix(pitch_area), t(c(x, y)))
+#   pitch_area$team <- team
+#   pitch_area$time <- time
+#   pitch_area$player <- player
+#   return(pitch_area)
+# }
+# 
+# #sample 10 seconds worth of data
+# animation_data <- tracking_data %>%
+#   filter(time %in% 600:610) %>%
+#   dplyr::select(time, next_time, ball_x, ball_y, x, y, next_x, next_y, team, player) 
+# 
+# #run the function over the data
+# anim_pitch_control <- animation_data %>%
+#   #run func
+#   pmap_df(., calc_PC_cpp, pitch_area = pitch) %>%
+#   #sum by team and area
+#   group_by(team, x, y, time) %>%
+#   summarise(team_sum = sum(I)) %>%
+#   pivot_wider(names_from = team, values_from = team_sum) %>%
+#   #σ - logistic function
+#   mutate(PC = 1 / (1 + exp(Home_Team - Away_Team)))
+# 
+# #plot
+# p7 <- ggplot(anim_pitch_control, aes(x = x, y = y, colour = PC)) +
+#   annotate_pitch(dimensions = pitch_statsbomb) +
+#   geom_point(alpha = 0.7, shape = 15) +
+#   scale_colour_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0.5) +
+#   theme_pitch() +
+#   labs(title = "pitch control rasters by match time (s)") +
+#   facet_wrap(~time)
+# p7

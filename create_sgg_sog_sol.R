@@ -1,51 +1,50 @@
+# If you want to run for all plays
 # Space Generation --------------------------------------------------------
+# 
+# tracking_plays <- 
+#   nfl_tracking_data %>%
+#   group_by(gameId, playId) %>%
+#   mutate(ball_snap = if_else(event == "ball_snap", time, min(time)),
+#          pass_forward = if_else(event == "pass_forward", time, max(time))) %>%
+#   mutate(ball_snap = max(ball_snap),
+#          pass_forward = min(pass_forward)) %>%
+#   filter(time >= ball_snap, time<= pass_forward) %>%
+#   nest(-c(gameId, playId))
+# 
+# 
+# yards <- 
+#   plays %>% 
+#   mutate(yard_line = if_else(yardlineSide != possessionTeam, 100 - yardlineNumber, yardlineNumber)) %>%
+#   left_join(games) %>%
+#   mutate(off_team = if_else(possessionTeam == homeTeamAbbr, "home", "away"),
+#          def_team = if_else(possessionTeam == homeTeamAbbr, "away", "home")) %>%
+#   select(gameId, playId, yard_line, off_team, def_team)
+# 
+# library(furrr)
+# plan("multicore")
+# 
+# spaces_df <-
+#   tracking_plays %>%
+#   left_join(yards) %>%
+#   ungroup()
+#   
+# tictoc::tic()
+# spaces = 
+#   future_pmap(list(spaces_df$data, spaces_df$yard_line, spaces_df$off_team, spaces_df$def_team, spaces_df$gameId, spaces_df$playId), 
+#               possibly(generate_space_list, NA))
+# tictoc::toc()
 
-big_testing_data <- nfl_tracking_data %>%
-  filter(playId == 3264, gameId == 2018090903, frameId >= 11, frameId <= 45)
-
-tracking_plays <- 
-  nfl_tracking_data %>%
-  group_by(gameId, playId) %>%
-  mutate(ball_snap = if_else(event == "ball_snap", time, min(time)),
-         pass_forward = if_else(event == "pass_forward", time, max(time))) %>%
-  mutate(ball_snap = max(ball_snap),
-         pass_forward = min(pass_forward)) %>%
-  filter(time >= ball_snap, time<= pass_forward) %>%
-  nest(-c(gameId, playId))
-
-
-yards <- 
-  plays %>% 
-  mutate(yard_line = if_else(yardlineSide != possessionTeam, 100 - yardlineNumber, yardlineNumber)) %>%
-  left_join(games) %>%
-  mutate(off_team = if_else(possessionTeam == homeTeamAbbr, "home", "away"),
-         def_team = if_else(possessionTeam == homeTeamAbbr, "away", "home")) %>%
-  select(gameId, playId, yard_line, off_team, def_team)
-
-library(furrr)
-plan("multicore")
-
-
-
-spaces_df <-
-  tracking_plays %>%
-  left_join(yards) %>%
-  ungroup()
-  
-tictoc::tic()
-spaces = 
-  future_pmap(list(spaces_df$data, spaces_df$yard_line, spaces_df$off_team, spaces_df$def_team, spaces_df$gameId, spaces_df$playId), 
-              possibly(generate_space_list, NA))
-tictoc::toc()
-
-generate_space_list(big_testing_data, 28.2)
+#generate_space_list(big_testing_data, 28.2)
 
 
+# if you want to test on Kenny Stills touchdown run this and step inside the function
 play_data <- nfl_tracking_data %>%
-  filter(playId == 75, gameId == 2018090600)
-yard_line = 20
-off_team = "away"
-def_team = "home"
+  filter(playId == 3264, gameId == 2018090903, frameId >= 11, frameId <= 45)
+yard_line = 28
+off_team = "home"
+def_team = "away"
+
+
 generate_space_list <- function(play_data, yard_line, off_team, def_team, gameId, playId){
   
   player_PC <-
