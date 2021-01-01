@@ -12,7 +12,8 @@ first_pass_ep_yac_both <- readRDS("Data/yac/first_pass_ep_yac_all_3.rds")
 # Coordinate covariates, otherwise many dupes
 first_pass_reduced <- first_pass_ep_yac_both %>%
   select(game_id, play_id, yac_epa_est = complete_epa, no_yac_epa_est = no_yac_epa,
-         observed_yac_epa_est = observed_yac_epa)
+         observed_yac_epa_est = observed_yac_epa,
+         observed_yac_epa_est_int = observed_yac_epa_int)
 
 # Separate into a completions + interceptions data set and an incompletions data set
 complete_intercept <- all_preds_with_defenders_and_epa %>%
@@ -36,7 +37,9 @@ complete_intercept_value <- complete_intercept %>%
          play_value_over_est = observed_yac_epa_est - play_value_est, # Check if replace with obs_yac_epa_est
          total_yac_epa = pred_c_no_def * just_the_yac_epa,
          total_complete_epa = pred_c_no_def * complete_epa,
-         yac_value_over_est = observed_yac_epa_est - yac_epa_est,
+         yac_value_over_est = if_else(pass_result != "IN",
+                                      observed_yac_epa_est - yac_epa_est,
+                                      observed_yac_epa_est_int - yac_epa_est),
          complete_value_over_est = no_yac_epa_est - total_complete_epa,
          play_value_over_est_2 = yac_value_over_est + complete_value_over_est)
 
@@ -68,13 +71,14 @@ complete_intercept_value %>% group_by(defender_id) %>%
 complete_intercept_value_reduced <- complete_intercept_value %>%
   select(game_id, play_id, pass_result, defender_id, defender_name,
          pred_c_no_def, complete_epa, incomplete_epa = 0, just_the_yac_epa, observed_epa,
-         play_value_est, play_value_over_est, yac_value_over_est,
+         play_value_est, play_value_over_est, complete_value_over_est, yac_value_over_est,
          play_value_over_est_2)
 
 incomplete_value_reduced <- incomplete_value %>%
   select(game_id, play_id, pass_result, defender_id, defender_name,
          pred_c_no_def, complete_epa = 0, incomplete_epa, just_the_yac_epa = 0, observed_epa,
-         play_value_est, play_value_over_est, yac_value_over_est = 0,
+         play_value_est, play_value_over_est, complete_value_over_est = 0,
+         yac_value_over_est = 0,
          play_value_over_est_2)
 
 all_value_reduced <- complete_intercept_value_reduced %>%
@@ -92,18 +96,21 @@ all_values_summarized <- all_value_reduced %>%
             total_play_value_est = sum(play_value_est),
             total_play_value_over_est = sum(play_value_over_est),
             total_yac_value_over_est = sum(yac_value_over_est, na.rm = TRUE),
-            total_play_value_over_est_2 = sum(play_value_over_est_2))
+            total_play_value_over_est_2 = sum(play_value_over_est_2, na.rm = TRUE),
+            # Do as subtraction instead of sum(complete_val_over_est) due to incomplete passes
+            total_complete_value_over_est = total_play_value_over_est_2 - total_yac_value_over_est)
 
 # New and old approach are highly correlated, I think I like the new one better
+  # Now that I include interception run backs, differs a fair bit (0.578 corr)
 all_values_summarized %>%
-  arrange(total_play_value_over_est) %>%
+  arrange(total_play_value_over_est_2) %>%
   View()
 
 all_values_summarized %>%
-  ggplot(aes(x = total_play_value_est, y = total_play_value_observed)) +
+  ggplot(aes(x = total_play_value_over_est_2, y = total_play_value_observed)) +
   geom_point() +
   geom_vline(data = all_values_summarized %>%
-               summarize(mean_pred = mean(total_play_value_est)),
+               summarize(mean_pred = mean(total_play_value_over_est)),
              aes(xintercept = mean_pred), col = "red") +
   geom_hline(data = all_values_summarized %>%
                summarize(mean_obs = mean(total_play_value_observed)),
@@ -118,15 +125,15 @@ all_values_summarized %>%
   geom_histogram()
 
 war_benchmarks <- all_values_summarized %>%
-  summarize(avg_value_over_est = mean(total_play_value_over_est),
+  summarize(avg_value_over_est = mean(total_play_value_over_est_2),
             # Need to do this one backwards because negative is good
-            tenth_percentile_over_est = quantile(total_play_value_over_est, 0.9))
+            tenth_percentile_over_est = quantile(total_play_value_over_est_2, 0.9))
 
 # Now a WAR plot
 war_options <- all_values_summarized %>%
-  mutate(total_war_per_384 = -1 * total_play_value_over_est / 38.4,
-         total_war_per_avg = -1 * (total_play_value_over_est - war_benchmarks$avg_value_over_est) / 38.4,
-         total_war_per_tenth = -1 * (total_play_value_over_est - war_benchmarks$tenth_percentile_over_est) / 38.4)
+  mutate(total_war_per_384 = -1 * total_play_value_over_est_2 / 38.4,
+         total_war_per_avg = -1 * (total_play_value_over_est_2 - war_benchmarks$avg_value_over_est) / 38.4,
+         total_war_per_tenth = -1 * (total_play_value_over_est_2 - war_benchmarks$tenth_percentile_over_est) / 38.4)
 
 saveRDS(war_options, "Data/war_options.rds")
 
@@ -143,9 +150,102 @@ war_options %>%
 library(gt)
 library(paletteer)
 
-gt_table_setup <- 
+# I think since I like the second approach better I will focus on that
+gt_table_setup <- war_options %>%
+    select(defender_name,
+           completion_percentage_allowed, expected_completion_percentage_allowed, cpoe,
+           total_complete_value_over_est, total_yac_value_over_est, 
+           #total_play_value_over_est_2,
+           total_war_per_tenth)
 
-war_options %>%
-  select(defender_name,
-         completion_percentage_allowed, expected_completion_percentage_allowed, cpoe,
-         )
+gt_table_setup %>%
+  arrange(desc(total_war_per_tenth)) %>%
+  slice(1:20) %>%
+  gt() %>%
+  cols_label(
+    defender_name = "Defender",
+    completion_percentage_allowed = "CP",
+    expected_completion_percentage_allowed = "xCP",
+    cpoe = "CPOE",
+    total_complete_value_over_est = "Pass Coverage Over Est",
+    total_yac_value_over_est = "Pursuit Over Est",
+    #total_play_value_over_est_2 = "Combined Contribution Over Est",
+    total_war_per_tenth = "Contribution as WAR"
+  ) %>%
+  # WAR is in the right direction, value isnt
+  data_color(
+    columns = vars(total_complete_value_over_est, total_yac_value_over_est),
+                   #total_play_value_over_est_2),
+    colors = scales::col_numeric(
+      palette = rev(c("#ffffff", "#f2fbd2", "#c9ecb4", "#93d3ab", "#35b0ab")),
+      domain = NULL
+      )
+  ) %>%
+  data_color(
+    columns = vars(total_war_per_tenth),
+    colors = scales::col_numeric(
+      palette = c("#ffffff", "#f2fbd2", "#c9ecb4", "#93d3ab", "#35b0ab"),
+      domain = NULL
+    )
+  ) %>%
+  fmt_percent(
+    columns = vars(completion_percentage_allowed, expected_completion_percentage_allowed)
+  ) %>%
+  fmt_number(
+    columns = vars(cpoe),
+    decimals = 4
+  ) %>%
+  fmt_number(
+    columns = vars(total_complete_value_over_est, total_yac_value_over_est,
+                   #total_play_value_over_est_2,
+                   total_war_per_tenth),
+    decimals = 2
+  ) %>%
+  tab_style(
+    style = list(
+      cell_borders(
+        sides = "right",
+        color = "black",
+        weight = px(3)
+      )
+    ),
+    locations = list(
+      cells_body(
+        columns = vars(cpoe)
+      )
+    )
+  ) %>%
+  tab_style(
+    style = list(
+      cell_borders(
+        sides = "right",
+        color = "black",
+        weight = px(2)
+      )
+    ),
+    locations = list(
+      cells_body(
+        columns = vars(total_complete_value_over_est,
+                       total_yac_value_over_est,
+                       total_war_per_tenth)
+      )
+    )
+  ) %>%
+  tab_style(
+    style = list(
+      cell_borders(
+        sides = "bottom",
+        color = "black",
+        weight = px(3)
+      )
+    ),
+    locations = list(
+      cells_column_labels(
+        columns = gt::everything()
+      )
+    )
+  ) %>%
+  tab_header(
+    title = md("**Defender Metric Summaries from the 2018 NFL Season**"),
+    subtitle = "Top 20 Players by Wins Above Replacement (WAR)"
+  )
