@@ -116,10 +116,11 @@ ep_for_receivers_exact <- function(all_frames_with_pbp, game_id_par, play_id_par
   # Perhaps this is because NFL teams throw more on 2nd down and this gets captured by EP model
   
   # What happens if the pass gets intercepted?
-  interception_params <- data.frame(yardlines = ceiling(all_frames_with_pbp$yards_downfield)) %>%
+  interception_params <- data.frame(yardlines = ceiling(all_frames_with_pbp$yards_downfield),
+                                    yac = all_frames_with_pbp$yac) %>%
     rowwise() %>%
     mutate(down = 1, # turnover, new set of downs for other team
-           yardline_100 = 100 - (line_of_scrimmage - yardlines),
+           yardline_100 = 100 - (line_of_scrimmage - yardlines - yac),
            yardline_100 = if_else(yardline_100 > 100, 80, yardline_100), # Safety check
            ydstogo = min(10, yardline_100), # add on the play covariates
            td_flag = (ydstogo <= 0),
@@ -355,11 +356,12 @@ all_preds_adj <- all_preds_with_defenders %>%
   mutate(yards_downfield = case_when(
     direction_of_play %in% "right" ~ arrival_x - line_of_scrim_x,
     direction_of_play %in% "left" ~ line_of_scrim_x - arrival_x
-  ),
+    ),
   yards_downfield = ceiling(yards_downfield),
   # Doing YAC part 1: 100% complete, 0 YAC, establishes baseline
   .pred_C = 1,
   .pred_I = 0,
+  yac = overall_yac,
   yac_0 = 0,
   frame_id_2 = frame_id,
   receiver = nfl_id) %>%
@@ -386,6 +388,21 @@ first_pass_ep_with_yac <- all_preds_adj %>%
   mutate(ep_rec = pmap(list(data, game_id, play_id, yardline_100, ydstogo, down),
                        ~ep_for_receivers_exact(..1, ..2, ..3, ..4, ..5, ..6)))
 
+# This one is with observed yac for better comparisons hopefully
+  # Actually this offensive yac removes the dependence on interceptions
+  # This is undesireable, get that back in there
+first_pass_ep_with_observed_yac <- all_preds_adj %>%
+  ungroup() %>%
+  #mutate(yac = yac_pred) %>%
+  # Think I was hitting some fractional problems
+  mutate(yac = if_else(is.na(yac), 0, round(yac))) %>%
+  nest(-game_id, -play_id, -yardline_100, -ydstogo, -down) %>%
+  #filter(game_id == first(game_id), play_id == first(play_id)) %>%
+  mutate(ep_rec = pmap(list(data, game_id, play_id, yardline_100, ydstogo, down),
+                       ~ep_for_receivers_exact(..1, ..2, ..3, ..4, ..5, ..6)))
+
+# Make a specific filter for interception plays, need observed EPA from this observed_yac obj
+
 first_pass_ep_unnested_no_yac <- first_pass_ep_no_yac %>%
   mutate(check_join = map2(data, ep_rec, ~ .x %>% mutate(receiver = as.character(receiver)) %>%
                              left_join(.y,
@@ -394,6 +411,13 @@ first_pass_ep_unnested_no_yac <- first_pass_ep_no_yac %>%
   unnest(check_join)
 
 first_pass_ep_unnested_with_yac <- first_pass_ep_with_yac %>%
+  mutate(check_join = map2(data, ep_rec, ~ .x %>% mutate(receiver = as.character(receiver)) %>%
+                             left_join(.y,
+                                       by = c("frame_id_2", "receiver", "display_name")))) %>%
+  select(-c(data, ep_rec)) %>%
+  unnest(check_join)
+
+first_pass_ep_unnested_observed_yac <- first_pass_ep_with_observed_yac %>%
   mutate(check_join = map2(data, ep_rec, ~ .x %>% mutate(receiver = as.character(receiver)) %>%
                              left_join(.y,
                                        by = c("frame_id_2", "receiver", "display_name")))) %>%
@@ -419,26 +443,39 @@ saveRDS(first_pass_ep_yac_both, "Data/yac/first_pass_ep_unnested_with_yac.rds")
 # End Script
 # # # # # #
 
+# Update
+first_pass_ep_yac_both <- readRDS("Data/yac/first_pass_ep_unnested_with_yac.rds")
+first_pass_ep_yac_all_3 <- first_pass_ep_yac_both %>%
+  left_join(first_pass_ep_unnested_observed_yac %>%
+              mutate(observed_yac_epa_int = if_else(pass_result %in% "IN",
+                                                    interception_epa,
+                                                    complete_epa)) %>%
+              select(game_id, play_id,
+                     frame_id_2,
+                     observed_yac_ep = adj_comp_ep,
+                     observed_yac_epa = complete_epa,
+                     observed_yac_epa_int))
+saveRDS(first_pass_ep_yac_all_3, "Data/yac/first_pass_ep_yac_all_3.rds")
 
-test_df <- data.frame(half_seconds_remaining = 1464,
-                      yards_to_go = c(4, 2, 10), 
-                      yard_line_100 = c(92, 90, 84), down = c(3, 4, 1), goal_to_go = 0)
-nflscrapR::calculate_expected_points(test_df, "half_seconds_remaining",
-                                     "yard_line_100", "down", "yards_to_go", "goal_to_go")
-
-test_grid <- expand.grid(half_seconds_remaining = 1000,
-                         goal_to_go = 0,
-                         ydstogo = 10,
-                         yardline_100 = 1:99,
-                         down = 1:4)
-initial_ep <- nflscrapR::calculate_expected_points(test_grid, "half_seconds_remaining",
-                                                   "yardline_100", "down", "ydstogo", "goal_to_go")$ep
-
-# The model clearly works, I must be breaking something in an update step
-  # Nowhere here do I have a play in which having fewer yards on a later down is better
-  # The only weirdness might come from down and distance changes
-  # Continue to review
-test_grid %>%
-  mutate(ep = initial_ep) %>%
-  ggplot(aes(x = yardline_100, y = ep, group = down, col = down)) +
-  geom_line()
+# test_df <- data.frame(half_seconds_remaining = 1464,
+#                       yards_to_go = c(4, 2, 10), 
+#                       yard_line_100 = c(92, 90, 84), down = c(3, 4, 1), goal_to_go = 0)
+# nflscrapR::calculate_expected_points(test_df, "half_seconds_remaining",
+#                                      "yard_line_100", "down", "yards_to_go", "goal_to_go")
+# 
+# test_grid <- expand.grid(half_seconds_remaining = 1000,
+#                          goal_to_go = 0,
+#                          ydstogo = 10,
+#                          yardline_100 = 1:99,
+#                          down = 1:4)
+# initial_ep <- nflscrapR::calculate_expected_points(test_grid, "half_seconds_remaining",
+#                                                    "yardline_100", "down", "ydstogo", "goal_to_go")$ep
+# 
+# # The model clearly works, I must be breaking something in an update step
+#   # Nowhere here do I have a play in which having fewer yards on a later down is better
+#   # The only weirdness might come from down and distance changes
+#   # Continue to review
+# test_grid %>%
+#   mutate(ep = initial_ep) %>%
+#   ggplot(aes(x = yardline_100, y = ep, group = down, col = down)) +
+#   geom_line()

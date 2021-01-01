@@ -86,8 +86,8 @@ all_preds_direction <- all_preds %>%
 
 # Add in the summary information above
 all_preds_with_defenders_imp <- all_preds_with_defenders %>%
-  left_join(all_preds_direction,
-            by = c("game_id", "play_id", "frame_id", "nfl_id")) %>%
+  # left_join(all_preds_direction,
+  #           by = c("game_id", "play_id", "frame_id", "nfl_id")) %>%
   group_by(game_id, play_id, frame_id, nfl_id) %>%
   slice(1) %>%
   ungroup()
@@ -100,15 +100,15 @@ all_preds_with_defenders_no_na_pr <- all_preds_with_defenders_imp %>%
 
 # Parse YAC
 all_preds_defenders_yac <- all_preds_with_defenders_no_na_pr %>%
-  left_join(nfl_data %>% select(game_id, play_id, offense_play_result, play_result, penalty_codes),
-            by = c("game_id", "play_id")) %>%
+  # left_join(nfl_data %>% select(game_id, play_id, offense_play_result, play_result, penalty_codes),
+  #           by = c("game_id", "play_id")) %>%
   mutate(is_comp = 1 * (pass_result == "C"),
          # Offense gains YAC on completion
          offense_yac = is_comp * (offense_play_result - yards_downfield),
          # Overall YAC can differ on fumbles
-         overall_yac = if_else(!is.na(penalty_codes),
-                               offense_yac,
-                              (play_result - yards_downfield)),
+         overall_yac = is.na(penalty_codes) *
+                               # Second term is frequently 0 except INT and FUM
+                               (offense_yac - (offense_play_result - play_result)),
          # Also want YAC on non-penalty plays as a result of fumble
          fumble_yac = is.na(penalty_codes) * (play_result - offense_play_result))
 
