@@ -211,7 +211,7 @@ gt_table_setup %>%
     ),
     locations = list(
       cells_body(
-        columns = vars(cpoe)
+        columns = vars(defender_name, cpoe)
       )
     )
   ) %>%
