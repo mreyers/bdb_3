@@ -346,7 +346,12 @@ ep_requirements <- nfl_data %>%
 # I need all of these covariates to do EP
 # For now I'll set YAC to 0 as we dont yet have a model for that
 # yards_downfield is just receiver_x - los, I have these x,y coords in all_preds
+  # Trying again with Lucas updates to YAC
 all_preds_with_defenders <- readRDS("Data/yac/yac_preds.rds")
+lucas_yac <- readRDS("Data/yac/xYAC_xgboost_v1.2.rds") %>%
+  select(game_id = old_game_id, play_id, xYAC, yac = yards_after_catch)
+
+# xgboost YAC is way better than the basic lmer stuff, replace preds and update YAC
 all_preds_adj <- all_preds_with_defenders %>%
   filter(nfl_id == target, frame_id == arrival_frame) %>%
   left_join(ep_requirements %>% select(game_id, play_id,
@@ -361,11 +366,14 @@ all_preds_adj <- all_preds_with_defenders %>%
   # Doing YAC part 1: 100% complete, 0 YAC, establishes baseline
   .pred_C = 1,
   .pred_I = 0,
-  yac = overall_yac,
   yac_0 = 0,
   frame_id_2 = frame_id,
   receiver = nfl_id) %>%
-  ungroup()
+  ungroup() %>%
+  left_join(lucas_yac, by = c("game_id", "play_id")) %>%
+  mutate(yac = if_else(pass_result %in% "C",
+                       yac,
+                       overall_yac))
 
 # Slightly different approach, messed up yardlines previously
 # Ran in about 20 minutes, check results
@@ -380,7 +388,7 @@ first_pass_ep_no_yac <- all_preds_adj %>%
 
 first_pass_ep_with_yac <- all_preds_adj %>%
   ungroup() %>%
-  mutate(yac = yac_pred) %>%
+  mutate(yac = xYAC) %>%
   # Think I was hitting some fractional problems
   mutate(yac = if_else(is.na(yac), 0, round(yac))) %>%
   nest(-game_id, -play_id, -yardline_100, -ydstogo, -down) %>%
@@ -437,14 +445,17 @@ first_pass_ep_yac_both <- first_pass_ep_unnested_with_yac %>%
 first_pass_ep_yac_both %>% filter(yac >= 0 & no_yac_epa > complete_epa) %>% View()
 
 # Save the data
-saveRDS(first_pass_ep_yac_both, "Data/yac/first_pass_ep_unnested_with_yac.rds")
+saveRDS(first_pass_ep_yac_both, "Data/yac/second_pass_ep_unnested_with_yac.rds")
 
 # # # # # # 
 # End Script
 # # # # # #
 
 # Update
-first_pass_ep_yac_both <- readRDS("Data/yac/first_pass_ep_unnested_with_yac.rds")
+  # Two weird plays still
+    # game_id == 2018091605, play_id == 2715
+    # game_id == 2018120905, play_id == 1426
+first_pass_ep_yac_both <- readRDS("Data/yac/second_pass_ep_unnested_with_yac.rds")
 first_pass_ep_yac_all_3 <- first_pass_ep_yac_both %>%
   left_join(first_pass_ep_unnested_observed_yac %>%
               mutate(observed_yac_epa_int = if_else(pass_result %in% "IN",
@@ -454,8 +465,11 @@ first_pass_ep_yac_all_3 <- first_pass_ep_yac_both %>%
                      frame_id_2,
                      observed_yac_ep = adj_comp_ep,
                      observed_yac_epa = complete_epa,
-                     observed_yac_epa_int))
-saveRDS(first_pass_ep_yac_all_3, "Data/yac/first_pass_ep_yac_all_3.rds")
+                     observed_yac_epa_int)) %>%
+  group_by(game_id, play_id) %>%
+  slice(1) %>%
+  ungroup()
+saveRDS(first_pass_ep_yac_all_3, "Data/yac/second_pass_ep_yac_all_3.rds")
 
 # test_df <- data.frame(half_seconds_remaining = 1464,
 #                       yards_to_go = c(4, 2, 10), 
