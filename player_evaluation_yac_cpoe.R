@@ -43,11 +43,11 @@ complete_intercept_value <- complete_intercept %>%
          play_value_over_est = observed_yac_epa_est - play_value_est, # Check if replace with obs_yac_epa_est
          total_yac_epa = pred_c_no_def * just_the_yac_epa,
          total_complete_epa = pred_c_no_def * complete_epa,
-         yac_value_over_est = if_else(pass_result != "IN",
-                                      observed_yac_epa_est - yac_epa_est,
-                                      observed_yac_epa_est_int - yac_epa_est),
+         # Used to all be within if_else(int) for yac, now splitting
+         yac_value_over_est = (pass_result != "IN") * (observed_yac_epa_est - yac_epa_est),
+         int_value_over_est = (pass_result == "IN") * (observed_yac_epa_est_int - yac_epa_est),
          complete_value_over_est = no_yac_epa_est - total_complete_epa,
-         play_value_over_est_2 = yac_value_over_est + complete_value_over_est)
+         play_value_over_est_2 = yac_value_over_est + complete_value_over_est + int_value_over_est)
 
 # Continue revising above formulas
 
@@ -58,33 +58,20 @@ incomplete_value <- incomplete %>%
          play_value_over_est = observed_epa - play_value_est,
          play_value_over_est_2 = play_value_over_est)
 
-# Check with plots
-complete_intercept_value %>% ggplot(aes(x = play_value_est)) + geom_histogram()
-complete_intercept_value %>% filter(pass_result %in% "C") %>%
-  ggplot(aes(x = complete_epa, y = observed_epa)) + geom_point() +
-  geom_abline(intercept = 0, slope = 1, col = "red")
-complete_intercept_value %>% ggplot(aes(x = play_value_est, y = observed_epa)) +
-  geom_point(col = "red") +
-  geom_point(aes(x = complete_epa + yac_epa_est), col = "blue")
-complete_intercept_value %>% ggplot(aes(x = play_value_over_est)) + geom_histogram()
-incomplete_value %>% ggplot(aes(x = play_value_over_est)) + geom_histogram()
-
-complete_intercept_value %>% group_by(defender_id) %>%
-  summarize(play_value_over_est = sum(play_value_over_est)) %>%
-  ggplot(aes(x = play_value_over_est)) + geom_histogram()
 # Now combine the necessary elements in one standardized summary
   # Adding in the 0 columns to allow row binding while also indicating what is not used
 complete_intercept_value_reduced <- complete_intercept_value %>%
   select(game_id, play_id, pass_result, defender_id, defender_name,
          pred_c_no_def, complete_epa, incomplete_epa = 0, just_the_yac_epa, observed_epa,
-         play_value_est, play_value_over_est, complete_value_over_est, yac_value_over_est,
+         play_value_est,
+         play_value_over_est, complete_value_over_est, yac_value_over_est, int_value_over_est,
          play_value_over_est_2)
 
 incomplete_value_reduced <- incomplete_value %>%
   select(game_id, play_id, pass_result, defender_id, defender_name,
          pred_c_no_def, complete_epa = 0, incomplete_epa, just_the_yac_epa = 0, observed_epa,
          play_value_est, play_value_over_est, complete_value_over_est = 0,
-         yac_value_over_est = 0,
+         yac_value_over_est = 0, int_value_over_est = 0,
          play_value_over_est_2)
 
 all_value_reduced <- complete_intercept_value_reduced %>%
@@ -100,12 +87,14 @@ all_values_summarized <- all_value_reduced %>%
             expected_completion_percentage_allowed = mean(pred_c_no_def),
             cpoe = completion_percentage_allowed - expected_completion_percentage_allowed,
             total_play_value_observed = sum(observed_epa),
-            total_play_value_est = sum(play_value_est),
-            total_play_value_over_est = sum(play_value_over_est),
+            #total_play_value_est = sum(play_value_est),
+            #total_play_value_over_est = sum(play_value_over_est),
             total_yac_value_over_est = sum(yac_value_over_est, na.rm = TRUE),
+            total_int_value_over_est = sum(int_value_over_est, na.rm = TRUE),
             total_play_value_over_est_2 = sum(play_value_over_est_2, na.rm = TRUE),
             # Do as subtraction instead of sum(complete_val_over_est) due to incomplete passes
-            total_complete_value_over_est = total_play_value_over_est_2 - total_yac_value_over_est) %>%
+            total_complete_value_over_est = 
+              total_play_value_over_est_2 - total_yac_value_over_est - total_int_value_over_est) %>%
   # modify afterwards to not mess up complete_value estimation
   left_join(deterrence_reduced %>%
               mutate(defender_id = as.numeric(as.character((nfl_id)))) %>%
@@ -135,10 +124,6 @@ all_values_summarized <- all_value_reduced %>%
 #   ggtitle("Observed vs Predicted EPA Surrendered When Nearest Defender") +
 #   theme_bw()
 
-
-all_values_summarized %>%
-  ggplot(aes(x = total_play_value_over_est)) +
-  geom_histogram()
 
 war_benchmarks <- all_values_summarized %>%
   summarize(avg_value_over_est = mean(total_play_value_over_est_2),
@@ -186,6 +171,11 @@ yac_z <- (yac_value - mean(yac_value)) / sd(yac_value)
 yac_p <- pnorm(yac_z, lower.tail = FALSE)
 yac_grades <- (yac_p - min(yac_p)) / (max(yac_p) - min(yac_p))
 
+int_value <- war_options$total_int_value_over_est
+int_z <- (int_value - mean(int_value)) / sd(int_value)
+int_p <- pnorm(int_z, lower.tail = FALSE)
+int_grades <- (int_p - min(int_p)) / (max(int_p) - min(int_p))
+
 det_value <- if_else(is.na(war_options$total_deterrence_value_over_est),
                      0,
                      war_options$total_deterrence_value_over_est)
@@ -197,47 +187,64 @@ det_grades <- (det_p - min(det_p)) / (max(det_p) - min(det_p))
 z_score_setup <- war_options %>%
   select(defender_name,
          completion_percentage_allowed, expected_completion_percentage_allowed, cpoe,
-         total_complete_value_over_est, total_yac_value_over_est, total_deterrence_value_over_est,
+         total_complete_value_over_est, total_yac_value_over_est,
+         total_int_value_over_est, total_deterrence_value_over_est,
          total_play_value_over_est_2,
          total_war_per_tenth) %>%
   mutate(total_complete_value_grade = complete_grades,
          total_yac_value_grade = yac_grades,
-         total_det_value_grade = det_grades,
-         wins_per_complete = total_complete_value_over_est)
+         total_int_value_grade = int_grades,
+         total_det_value_grade = det_grades)
 
 
 # Setting up some prettier table options
 library(gt)
 library(paletteer)
 
+# Need to calculate proportion of WAR to assign each category
+
 # I think since I like the second approach better I will focus on that
+  # Something is going weird, not summing back up to total WAR
+  # Likely to do with the baselining that happens to setup WAR in the first place
+  # Revise later
 gt_table_setup <- z_score_setup %>%
-  mutate(total_war_per_tenth_complete =
-           total_complete_value_over_est / (total_play_value_over_est_2) * total_war_per_tenth,
+  mutate(abs_magnitude = abs(total_complete_value_over_est) +
+           abs(total_yac_value_over_est) + abs(total_int_value_over_est) + abs(total_deterrence_value_over_est),
+         total_war_per_tenth_complete =
+           -1 * (total_complete_value_over_est) /
+           abs_magnitude * total_war_per_tenth,
          total_war_per_tenth_yac =
-           total_yac_value_over_est / (total_play_value_over_est_2) * total_war_per_tenth,
+           -1 * (total_yac_value_over_est) /
+           abs_magnitude * total_war_per_tenth,
+         total_war_per_tenth_int =
+           -1 * (total_int_value_over_est) /
+           abs_magnitude * total_war_per_tenth,
          total_war_per_tenth_det =
-           total_deterrence_value_over_est / (total_play_value_over_est_2) * total_war_per_tenth) %>%
+           -1 * (total_deterrence_value_over_est) /
+           abs_magnitude * total_war_per_tenth) %>%
     select(defender_name,
            completion_percentage_allowed, expected_completion_percentage_allowed, cpoe,
-           total_complete_value_grade, total_yac_value_grade, total_det_value_grade,
+           total_complete_value_grade, total_yac_value_grade,
+           total_int_value_grade, total_det_value_grade,
            #total_play_value_over_est_2,
            total_war_per_tenth,
            total_war_per_tenth_complete,
            total_war_per_tenth_yac,
+           total_war_per_tenth_int,
            total_war_per_tenth_det)
   
 gt_table_setup %>%
   select(-completion_percentage_allowed) %>%
   arrange(desc(total_war_per_tenth)) %>%
-  #slice(1:20) %>%
+  slice(1:20) %>%
   gt() %>%
   cols_label(
     defender_name = "Defender",
     expected_completion_percentage_allowed = "xCP",
     cpoe = "CPOE",
-    total_complete_value_grade = "Pass Coverage Value Grade (WAR)",
+    total_complete_value_grade = "Pass Defense Value Grade (WAR)",
     total_yac_value_grade = "Pursuit Value Grade (WAR)",
+    total_int_value_grade = "Interception Value Grade (WAR)",
     total_det_value_grade = "Deterrence Value Grade (WAR)",
     #total_play_value_over_est_2 = "Combined Contribution Over Est",
     total_war_per_tenth = "Contribution as WAR"
@@ -245,7 +252,8 @@ gt_table_setup %>%
   # WAR is in the right direction, value isnt
   # Now that it is grades, remove the rev()
   data_color(
-    columns = vars(total_complete_value_grade, total_yac_value_grade, total_det_value_grade),
+    columns = vars(total_complete_value_grade, total_yac_value_grade,
+                   total_int_value_grade, total_det_value_grade),
                    #total_play_value_over_est_2),
     colors = scales::col_numeric(
       palette = c("#ffffff", "#f2fbd2", "#c9ecb4", "#93d3ab", "#35b0ab"),
@@ -254,7 +262,8 @@ gt_table_setup %>%
   ) %>%
   data_color(
     columns = vars(total_war_per_tenth, total_war_per_tenth_yac,
-                   total_war_per_tenth_complete, total_war_per_tenth_det),
+                   total_war_per_tenth_complete,
+                   total_war_per_tenth_int, total_war_per_tenth_det),
     colors = scales::col_numeric(
       palette = c("#ffffff", "#f2fbd2", "#c9ecb4", "#93d3ab", "#35b0ab"),
       domain = NULL
@@ -270,12 +279,14 @@ gt_table_setup %>%
   fmt_number(
     columns = vars(total_war_per_tenth_yac,
                    total_war_per_tenth_complete,
+                   total_war_per_tenth_int,
                    total_war_per_tenth_det,
                    total_war_per_tenth),
     decimals = 2
   ) %>%
   fmt_number(
-    columns = vars(total_complete_value_grade, total_yac_value_grade, total_det_value_grade),
+    columns = vars(total_complete_value_grade, total_yac_value_grade,
+                   total_int_value_grade, total_det_value_grade),
     decimals = 0,
     scale_by = 100
   ) %>% 
@@ -287,6 +298,11 @@ gt_table_setup %>%
   cols_merge(
     columns = vars(total_yac_value_grade, total_war_per_tenth_yac),
     hide_columns = vars(total_war_per_tenth_yac),
+    pattern = "{1} ({2})"
+  ) %>%
+  cols_merge(
+    columns = vars(total_int_value_grade, total_war_per_tenth_int),
+    hide_columns = vars(total_war_per_tenth_int),
     pattern = "{1} ({2})"
   ) %>%
   cols_merge(
@@ -320,13 +336,15 @@ gt_table_setup %>%
       cells_body(
         columns = vars(total_complete_value_grade,
                        total_yac_value_grade,
+                       total_int_value_grade,
                        total_det_value_grade,
                        total_war_per_tenth)
       )
     )
   ) %>%
   cols_move(
-    columns = vars(total_det_value_grade, total_complete_value_grade, total_yac_value_grade),
+    columns = vars(total_det_value_grade, total_complete_value_grade,
+                   total_yac_value_grade, total_int_value_grade),
     after = vars(cpoe)
   ) %>%
   tab_style(
