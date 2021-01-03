@@ -9,7 +9,8 @@
 all_preds_with_defenders_and_epa <- readRDS("Data/all_preds_with_defenders_and_epa.rds")
   # Switch back to first_pass_ep_yac_all_3.rds for original results
 first_pass_ep_yac_both <- readRDS("Data/yac/second_pass_ep_yac_all_3.rds")
-deterrence_epa <- readRDS("Data/deterrence/deterrence_summary (1).RDS")
+  # Switch back to deterrence_summary (1) for original results
+deterrence_epa <- readRDS("Data/deterrence/deterrence_new_value.rds") 
 defender_assignment <- readRDS("Data/release_and_arrival.rds")
 
 # Coordinate covariates, otherwise many dupes
@@ -20,7 +21,8 @@ first_pass_reduced <- first_pass_ep_yac_both %>%
 
 # This is already a summary value, skip this one down to the WAR
 deterrence_reduced <- deterrence_epa %>%
-  select(nfl_id, deterrence_value = total_epa_value_over_expected)
+  # Different columns if back on original file
+  select(nfl_id = closest_defensive_player, deterrence_value = total_det_value)
 
 # Separate into a completions + interceptions data set and an incompletions data set
 complete_intercept <- all_preds_with_defenders_and_epa %>%
@@ -50,8 +52,9 @@ complete_intercept_value <- complete_intercept %>%
          total_yac_epa = pred_c_no_def * just_the_yac_epa,
          total_complete_epa = pred_c_no_def * complete_epa,
          # Used to all be within if_else(int) for yac, now splitting
-         yac_value_over_est = (pass_result != "IN") * (observed_yac_epa_est - yac_epa_est),
-         int_value_over_est = (pass_result == "IN") * (observed_yac_epa_est_int - yac_epa_est),
+         # Unsure if I should use yac_epa_est for int_value with pred_c or no_yac_epa with 1 - pred_c
+         yac_value_over_est = pred_c_no_def * (pass_result != "IN") * (observed_yac_epa_est - yac_epa_est),
+         int_value_over_est = pred_c_no_def * (pass_result == "IN") * (observed_yac_epa_est_int - yac_epa_est),
          complete_value_over_est = no_yac_epa_est - total_complete_epa,
          play_value_over_est_2 = yac_value_over_est + complete_value_over_est + int_value_over_est,
          play_value_over_est_no_int = yac_value_over_est + complete_value_over_est)
@@ -123,7 +126,8 @@ arrival_summary <- arrival_summary %>%
 arrival_summary %>%
   filter(defender_name %in% "Damontae Kazee") %>% View()
 
-# Release value should be deterrence
+# Calculate the values for each subset
+  # Release value should be deterrence
 release_value_summarized <- release_summary %>%
   group_by(nearest_defender_id) %>%
   summarize(n_reps = n()) %>%
@@ -132,6 +136,7 @@ release_value_summarized <- release_summary %>%
               select(defender_id, total_deterrence_value_over_est = deterrence_value),
             by = c("nearest_defender_id" = "defender_id"))
 
+  # Arrival value should be all other facets
 arrival_value_summarized <- arrival_summary %>%
   group_by(nearest_defender_id) %>%
   summarize(defender_name = first(defender_name),
@@ -232,10 +237,10 @@ war_options <- all_values_summarized %>%
          total_war_per_avg = -1 * (total_play_value_over_est_no_int - war_benchmarks$avg_value_over_est) / 38.4,
          total_war_per_tenth = -1 * (total_play_value_over_est_no_int - war_benchmarks$tenth_percentile_over_est) / 38.4)
 
-# war_options <- all_values_summarized %>%
-#   mutate(total_war_per_384 = -1 * total_play_value_over_est_2 / 38.4,
-#          total_war_per_avg = -1 * (total_play_value_over_est_2 - war_benchmarks$avg_value_over_est) / 38.4,
-#          total_war_per_tenth = -1 * (total_play_value_over_est_2 - war_benchmarks$tenth_percentile_over_est) / 38.4)
+war_options <- all_values_summarized %>%
+  mutate(total_war_per_384 = -1 * total_play_value_over_est_2 / 38.4,
+         total_war_per_avg = -1 * (total_play_value_over_est_2 - war_benchmarks$avg_value_over_est) / 38.4,
+         total_war_per_tenth = -1 * (total_play_value_over_est_2 - war_benchmarks$tenth_percentile_over_est) / 38.4)
 
 
 saveRDS(war_options, "Data/war_options.rds")
@@ -288,6 +293,7 @@ z_score_setup <- war_options %>%
          total_int_value_grade = int_grades,
          total_det_value_grade = det_grades)
 
+saveRDS(z_score_setup, "Data/output/z_score_setup.rds")
 
 # Setting up some prettier table options
 library(gt)
@@ -328,7 +334,7 @@ gt_table_setup <- z_score_setup %>%
 gt_table_setup %>%
   select(-completion_percentage_allowed) %>%
   arrange(desc(total_war_per_tenth)) %>%
-  slice(1:20) %>%
+  #slice(1:20) %>%
   gt() %>%
   cols_label(
     defender_name = "Defender",
