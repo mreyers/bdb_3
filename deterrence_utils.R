@@ -62,6 +62,10 @@ create_train_data <- function(track_week_data, cp_data) {
     tracking_data
   ) %>% group_by(game_id, play_id) %>% tidyr::nest()
   
+  # play_nest = play_nest %>% filter(play_id==190,game_id==2018090600)
+  # 
+  # extract_receiver(play_nest$data[[1]])
+  
   play <-
     play_nest %>% group_by(game_id, play_id) %>%  mutate(new_df = purrr::map(data, extract_receiver)) 
   
@@ -86,6 +90,8 @@ extract_receiver <- function(play_dat){
   if(length(qb_id)==0){
     qb_id = NA
   }
+  
+  # extract_location_at_pass_release(receivers_df$x[2],receivers_df$y[2],defenders_df)
   
   receivers_df <- 
     receivers_df %>% 

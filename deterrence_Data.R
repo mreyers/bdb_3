@@ -108,7 +108,7 @@ t2 = t %>%
   filter(!is.na(closest_defensive_player))
 
 play_basics <-
-  play %>% select(game_id, play_id, down, yards_to_go, yd_line_100, personnel_o)
+  play %>% select(game_id, play_id, down, yards_to_go, yardline_100, personnel_o)
 
 parse_string_2 <- function(x, pattern) {
   val <-
@@ -120,12 +120,16 @@ train_df <- t %>% left_join(play_basics) %>% left_join(target) %>%
   mutate(
     down = as.factor(down),
     distance = yards_to_go,
-    closest_defensive_player_f = as.factor(
-      if_else(
+    closest_defensive_player_f = if_else(
         closest_defensive_player %in% create_factor(closest_defensive_player),
         closest_defensive_player,
         999999
-      )
+      ),
+    # set different value if player is wide open
+    closest_defensive_player_f = if_else(
+      is.na(closest_defensive_player),
+      999998,
+      closest_defensive_player_f
     ),
     qb_id_f = as.factor(if_else(
       qb_id_f %in% create_factor(qb_id_f),
@@ -151,8 +155,9 @@ keep_plays = train_df %>% group_by(game_id, play_id) %>% summarize(cnt =
 
 final_train_df <-
   train_df %>% inner_join(keep_plays) %>% filter(!is.na(target)) %>% mutate(
-    distance_to_goal = yd_line_100 - air_yards_x,
-    distance_to_sticks = air_yards_x - yards_to_go
+    distance_to_goal = yardline_100 - air_yards_x,
+    distance_to_sticks = air_yards_x - yards_to_go,
+    less_than_2 = half_seconds_remaining <= 120
   )
 
 
