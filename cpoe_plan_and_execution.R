@@ -153,7 +153,7 @@ possession_team <- plays %>%
 
 # New data has improved this, now only restrained by all_frames_covariates_weeki
 # Seems that set is missing a few observations but major improvement already
-for(i in 13:17){
+for(i in 1:17){
   # Actual covariate setup because Im a jackass that forgot to condense influence
   # Will require a bit more preprocessing to finalize bc I need to go do something
   # and want to set this running
