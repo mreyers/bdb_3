@@ -49,6 +49,13 @@ phase_1 <- phase_0 %>%
   scale_fill_manual(values = team_vec(which = 1)) +
   scale_color_manual(values = team_vec(which = 2)) +
   ylab("") +
+  scale_y_discrete(breaks=c("tot_deterrence_war","tot_complete_war",
+                            "tot_int_war", "tot_yac_war"),
+                   labels=c("Deterrence", "Prevention", "Interception", "Pursuit")) +
   facet_wrap(~ def_team) +
-  theme_bw()
+  ggtitle("Comparison of WAR Generation Across Teams") +
+  xlab("Total WAR") +
+  theme_bw() +
+  theme(legend.position = "none")
 
+phase_1
