@@ -5,6 +5,11 @@
 # I am going to test this thought by bringing together the work from
 # CPOE and YAC to investigate
 
+# Target info to supplement defender_assignment_lucas
+target <- read_csv("Data/additional_data/targetedReceiver.csv") %>%
+  janitor::clean_names() %>%
+  mutate(target = 1)
+
 # Load the required data
 all_preds_with_defenders_and_epa <- readRDS("Data/all_preds_with_defenders_and_epa.rds")
   # Switch back to first_pass_ep_yac_all_3.rds for original results
@@ -12,6 +17,14 @@ first_pass_ep_yac_both <- readRDS("Data/yac/second_pass_ep_yac_all_3.rds")
   # Switch back to deterrence_summary (1) for original results
 deterrence_epa <- readRDS("Data/deterrence/deterrence_new_value_new_probs.rds") 
 defender_assignment <- readRDS("Data/release_and_arrival.rds")
+
+  # New Lucas approach to calculating nearest defender, better allocation scheme
+defender_assignment_lucas <- readRDS("Data/additional_data/def_assignment_df.rds") %>%
+  select(game_id, play_id, defender_id, assigned_rec_id) %>%
+  left_join(target, by = c("game_id", "play_id", "assigned_rec_id" = "target_nfl_id"))
+defender_assignment_lucas_targeted <- defender_assignment_lucas %>%
+  filter(target == 1) %>%
+  select(-target)
 
 # Coordinate covariates, otherwise many dupes
 first_pass_reduced <- first_pass_ep_yac_both %>%
@@ -95,6 +108,22 @@ all_value_reduced <- all_value_reduced %>%
   left_join(defender_assignment,
             by = c("game_id", "play_id"))
 
+# Additionally, add in the defensive team a player is on
+plays_map <- read_csv("Data/plays.csv", col_types = cols()) %>%
+  janitor::clean_names(case = "snake") %>%
+  group_by(game_id) %>%
+  arrange(possession_team) %>%
+  filter(!is.na(possession_team)) %>%
+  # Mutate to get the opposite team
+  mutate(def_team = if_else(possession_team == first(possession_team),
+                            last(possession_team),
+                            first(possession_team))) %>%
+  ungroup() %>%
+  select(game_id, play_id, def_team)
+
+all_value_reduced <- all_value_reduced %>%
+  left_join(plays_map, by = c("game_id", "play_id"))
+
 # Now summarize with respect to these outcomes
   # Adding in deterrence here
   # Now I need to switch the ID info 
@@ -130,7 +159,8 @@ arrival_summary %>%
   # Release value should be deterrence
 release_value_summarized <- release_summary %>%
   group_by(nearest_defender_id) %>%
-  summarize(n_reps = n()) %>%
+  summarize(n_reps = n(),
+            def_team = first(def_team)) %>%
   left_join(deterrence_reduced %>%
               mutate(defender_id = as.numeric(as.character((nfl_id)))) %>%
               select(defender_id, total_deterrence_value_over_est = deterrence_value),
