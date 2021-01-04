@@ -10,7 +10,7 @@ all_preds_with_defenders_and_epa <- readRDS("Data/all_preds_with_defenders_and_e
   # Switch back to first_pass_ep_yac_all_3.rds for original results
 first_pass_ep_yac_both <- readRDS("Data/yac/second_pass_ep_yac_all_3.rds")
   # Switch back to deterrence_summary (1) for original results
-deterrence_epa <- readRDS("Data/deterrence/deterrence_new_value.rds") 
+deterrence_epa <- readRDS("Data/deterrence/deterrence_new_value_new_probs.rds") 
 defender_assignment <- readRDS("Data/release_and_arrival.rds")
 
 # Coordinate covariates, otherwise many dupes
@@ -212,6 +212,9 @@ all_values_summarized <- arrival_value_summarized %>%
 #   theme_bw()
 
 
+# Perhaps we need to update the tenth percentile so that it handles a little differently
+  # Positional replacement level? Differ for LB, CB/DB, S?
+  # Remove players below a certain snap number? Probably naturally exist as replacement
 war_benchmarks <- all_values_summarized %>%
   summarize(avg_value_over_est = mean(total_play_value_over_est_2),
             # Need to do this one backwards because negative is good
@@ -254,13 +257,13 @@ war_options <- all_values_summarized %>%
 
 saveRDS(war_options, "Data/war_options.rds")
 
-war_options %>%
-  ggplot() +
-  geom_density(aes(x = total_war_per_384, col = "per_384")) +
-  geom_density(aes(x = total_war_per_avg, col = "per_avg")) +
-  geom_density(aes(x = total_war_per_tenth, col = "per_tenth")) +
-  theme_bw() +
-  ggtitle("Wins Options")
+# war_options %>%
+#   ggplot() +
+#   geom_density(aes(x = total_war_per_384, col = "per_384")) +
+#   geom_density(aes(x = total_war_per_avg, col = "per_avg")) +
+#   geom_density(aes(x = total_war_per_tenth, col = "per_tenth")) +
+#   theme_bw() +
+#   ggtitle("Wins Options")
 
 # Additionally there was a thought of turning these into grades
 # Would do this by calculating Z-scores for each skill and converting to the percentile
@@ -291,7 +294,7 @@ det_grades <- (det_p - min(det_p)) / (max(det_p) - min(det_p))
 
 
 z_score_setup <- war_options %>%
-  select(defender_name,
+  select(nearest_defender_id, defender_name,
          completion_percentage_allowed, expected_completion_percentage_allowed, cpoe,
          total_complete_value_over_est, total_yac_value_over_est,
          total_int_value_over_est, total_deterrence_value_over_est,

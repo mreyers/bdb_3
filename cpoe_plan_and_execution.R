@@ -477,6 +477,7 @@ basic_brms_adjust <- brm(pass_result_bin ~ logit_pred_c +
                          cores = 2,
                          silent = FALSE)
 tictoc::toc()
+#saveRDS(basic_brms_adjust, "Data/cp_predictions/brms_adjustment_model.rds")
 
 # Yeah ok this seems to work alright
 summary(basic_brms_adjust)
@@ -491,7 +492,8 @@ adjusted_pred_c_no_def <- predict(basic_brms_adjust,
   # 6 a) Do value attribution via result - adjusted_pred_c_no_def
 value_attr <- all_preds_with_defenders_and_qbs %>%
   # First column is the prediction
-  mutate(pred_c_no_def = adjusted_pred_c_no_def[,1]) %>%
+  mutate(pred_c_no_def = adjusted_pred_c_no_def[,1],
+         pred_c_with_def = adjusted_pred_c_all[,1]) %>%
   group_by(defender_id) %>%
   summarize(defender = first(defender_name),
             n_games = length(unique(game_id)),
@@ -500,6 +502,7 @@ value_attr <- all_preds_with_defenders_and_qbs %>%
             comp_perc_allowed = nearest_rec_completed / nearest_rec_targeted,
             exp_comp_perc_allowed = mean(.pred_C),
             exp_comp_perc_allowed_given_players = mean(pred_c_no_def),
+            exp_comp_perc_allowed_all_players = mean(pred_c_with_def),
             cpoe = comp_perc_allowed - exp_comp_perc_allowed,
             cpoe_controlled =  comp_perc_allowed - exp_comp_perc_allowed_given_players,
             .groups = "drop"
@@ -560,8 +563,9 @@ act_epa <- read_csv("Data/plays.csv") %>%
 # Add a join feature as I lose a few plays somewhere
 join_holder <- all_preds_with_defenders_and_qbs %>%
   # First column is the prediction
-  mutate(pred_c_no_def = adjusted_pred_c_no_def[,1]) %>%
-  select(game_id, play_id, nfl_id, pred_c_no_def)
+  mutate(pred_c_no_def = adjusted_pred_c_no_def[,1],
+         pred_c_with_def = adjusted_pred_c_all[,1]) %>%
+  select(game_id, play_id, nfl_id, pred_c_no_def, pred_c_with_def)
 
 all_preds_with_defenders_and_epa <- first_pass_ep_unnested %>%
   filter(nfl_id == target) %>%
@@ -574,6 +578,7 @@ all_preds_with_defenders_and_epa <- first_pass_ep_unnested %>%
   left_join(join_holder, by = c("game_id", "play_id", "nfl_id")) %>%
   filter(!is.na(pred_c_no_def)) %>%
   mutate(hypothetical_epa = pred_c_no_def * complete_epa + (1 - pred_c_no_def) * incomplete_epa,
+         hypothetical_epa_with_def = pred_c_with_def * complete_epa + (1 - pred_c_with_def) * incomplete_epa,
          # no_yac should be complete_epa if caught, but allow run backs if picked
          no_yac_epa = if_else(pass_result == "C", complete_epa, incomplete_epa), # observed_epa
          no_yac_with_runback_epa = if_else(pass_result == "C", complete_epa, observed_epa),
