@@ -227,7 +227,10 @@ war_benchmarks <- all_values_summarized %>%
             tenth_percentile_over_est_yac = quantile(total_yac_value_over_est, 0.9),
             # deterrence
             avg_value_over_est_deterrence = mean(total_deterrence_value_over_est, na.rm = TRUE),
-            tenth_percentile_over_est_deterrence = quantile(total_deterrence_value_over_est, 0.9, na.rm = TRUE)
+            tenth_percentile_over_est_deterrence = quantile(total_deterrence_value_over_est, 0.9, na.rm = TRUE),
+            # int
+            avg_value_over_est_int = mean(total_int_value_over_est),
+            tenth_percentile_over_est_int = quantile(total_int_value_over_est, 0.9)
             )
 
 # Now a WAR plot
@@ -242,6 +245,12 @@ war_options <- all_values_summarized %>%
          total_war_per_avg = -1 * (total_play_value_over_est_2 - war_benchmarks$avg_value_over_est) / 38.4,
          total_war_per_tenth = -1 * (total_play_value_over_est_2 - war_benchmarks$tenth_percentile_over_est) / 38.4)
 
+war_options <- all_values_summarized %>%
+  mutate(total_war_per_tenth = -1 * (total_play_value_over_est_2 - war_benchmarks$tenth_percentile_over_est) / 38.4,
+         total_war_per_tenth_complete = -1 * (total_complete_value_over_est - war_benchmarks$tenth_percentile_over_est_complete) / 38.4,
+         total_war_per_tenth_yac = -1 * (total_yac_value_over_est - war_benchmarks$tenth_percentile_over_est_yac) / 38.4,
+         total_war_per_tenth_det = -1 * (total_deterrence_value_over_est - war_benchmarks$tenth_percentile_over_est_deterrence) / 38.4,
+         total_war_per_tenth_int = -1 * (total_int_value_over_est - war_benchmarks$tenth_percentile_over_est_int) / 38.4)
 
 saveRDS(war_options, "Data/war_options.rds")
 
@@ -287,11 +296,15 @@ z_score_setup <- war_options %>%
          total_complete_value_over_est, total_yac_value_over_est,
          total_int_value_over_est, total_deterrence_value_over_est,
          total_play_value_over_est_2,
-         total_war_per_tenth) %>%
+         total_war_per_tenth,
+         total_war_per_tenth_complete, total_war_per_tenth_yac,
+         total_war_per_tenth_det, total_war_per_tenth_int) %>%
   mutate(total_complete_value_grade = complete_grades,
          total_yac_value_grade = yac_grades,
          total_int_value_grade = int_grades,
-         total_det_value_grade = det_grades)
+         total_det_value_grade = det_grades,
+         total_war_per_tenth = total_war_per_tenth_complete + total_war_per_tenth_yac +
+           total_war_per_tenth_det + total_war_per_tenth_int)
 
 saveRDS(z_score_setup, "Data/output/z_score_setup.rds")
 
@@ -306,20 +319,20 @@ library(paletteer)
   # Likely to do with the baselining that happens to setup WAR in the first place
   # Revise later
 gt_table_setup <- z_score_setup %>%
-  mutate(abs_magnitude = abs(total_complete_value_over_est) +
-           abs(total_yac_value_over_est) + abs(total_int_value_over_est) + abs(total_deterrence_value_over_est),
-         total_war_per_tenth_complete =
-           (total_complete_value_over_est) /
-           total_play_value_over_est_2 * total_war_per_tenth,
-         total_war_per_tenth_yac =
-           (total_yac_value_over_est) /
-           total_play_value_over_est_2 * total_war_per_tenth,
-         total_war_per_tenth_int =
-           (total_int_value_over_est) /
-           total_play_value_over_est_2 * total_war_per_tenth,
-         total_war_per_tenth_det =
-           (total_deterrence_value_over_est) /
-           total_play_value_over_est_2 * total_war_per_tenth) %>%
+  # mutate(abs_magnitude = abs(total_complete_value_over_est) +
+  #          abs(total_yac_value_over_est) + abs(total_int_value_over_est) + abs(total_deterrence_value_over_est),
+  #        total_war_per_tenth_complete =
+  #          (total_complete_value_over_est) /
+  #          total_play_value_over_est_2 * total_war_per_tenth,
+  #        total_war_per_tenth_yac =
+  #          (total_yac_value_over_est) /
+  #          total_play_value_over_est_2 * total_war_per_tenth,
+  #        total_war_per_tenth_int =
+  #          (total_int_value_over_est) /
+  #          total_play_value_over_est_2 * total_war_per_tenth,
+  #        total_war_per_tenth_det =
+  #          (total_deterrence_value_over_est) /
+  #          total_play_value_over_est_2 * total_war_per_tenth) %>%
     select(defender_name,
            completion_percentage_allowed, expected_completion_percentage_allowed, cpoe,
            total_complete_value_grade, total_yac_value_grade,
