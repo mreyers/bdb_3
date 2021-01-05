@@ -422,6 +422,12 @@ all_preds_with_defenders <- all_preds %>%
             by = c("game_id", "play_id")) %>%
   filter(frame_id == throw_frame) 
 
+  # 5.a) Append our similarity assigned defenders to the dataset
+most_similar <- readRDS("Data/additional_data/most_similar.rds")
+all_preds_with_defenders <- all_preds_with_defenders %>%
+  left_join(most_similar %>%
+              rename(similarity_defender_id = defender_id), by = c("game_id", "play_id"))
+
 # 6. Use Outcome - CP to generate CPOE across dataset
 basic_cpoe <- all_preds_with_defenders %>%
   group_by(defender_id) %>%
@@ -452,14 +458,19 @@ qb_play <- all_preds %>%
 # Add low threshold modification due to selection bias inherent in sports
 all_preds_with_defenders_and_qbs <- all_preds_with_defenders %>%
   left_join(qb_play, by = c("game_id", "play_id")) %>%
-  group_by(defender_id) %>%
+  mutate(similarity_defender_id = ifelse(is.na(similarity_defender_id),
+                                         defender_id,
+                                         similarity_defender_id)) %>%
+  group_by(similarity_defender_id) %>%
   mutate(n_targets = n(),
-         modified_def_id = if_else(n_targets < 30, 99999, defender_id)) %>%
+         modified_def_id = if_else(n_targets < 30, 99999, similarity_defender_id),
+         similarity_defender_id = modified_def_id) %>%
   ungroup() %>%
   mutate(pass_result_bin = if_else(pass_result %in% "C", 1, 0),
          qb_id_f = factor(qb_id),
          target_id_f = factor(nfl_id),
          defender_id_f = factor(modified_def_id),
+         similarity_def_id_f = factor(similarity_defender_id),
          logit_pred_c = case_when(.pred_C < 0.01 ~ log(0.01 / 0.99),
                                   .pred_C > 0.99 ~ log(0.99 / 0.01),
                                   TRUE ~ log(.pred_C / (1 - .pred_C))))
@@ -468,7 +479,7 @@ library(brms)
 # Super simple brms model to estimate adjustment to CP
 tictoc::tic()
 basic_brms_adjust <- brm(pass_result_bin ~ logit_pred_c +
-                           (1|qb_id_f) + (1|target_id_f) + (1|defender_id_f),
+                           (1|qb_id_f) + (1|target_id_f) + (1|similarity_def_id_f),#(1|defender_id_f),
                                data = all_preds_with_defenders_and_qbs,
                                family = bernoulli(),
                                chains = 2,
@@ -484,10 +495,13 @@ summary(basic_brms_adjust)
 
 # Lets get the predictions for each observation then from this
   # Will represent adjusted probability
-adjusted_pred_c_all <- predict(basic_brms_adjust,
-                               re_formula = ~ (1|qb_id_f) + (1|target_id_f) + (1|defender_id_f))
-adjusted_pred_c_no_def <- predict(basic_brms_adjust,
-                                  re_formula = ~ (1|qb_id_f) + (1|target_id_f))
+  # allow_new_levels added after inclusion of similarity scores
+adjusted_pred_c_all <- predict(basic_brms_adjust, newdata = all_preds_with_defenders_and_qbs,
+                               re_formula = ~ (1|qb_id_f) + (1|target_id_f) + (1|similarity_def_id_f),
+                               allow_new_levels = TRUE)
+adjusted_pred_c_no_def <- predict(basic_brms_adjust, newdata = all_preds_with_defenders_and_qbs,
+                                  re_formula = ~ (1|qb_id_f) + (1|target_id_f),
+                                  allow_new_levels = TRUE)
 
   # 6 a) Do value attribution via result - adjusted_pred_c_no_def
 value_attr <- all_preds_with_defenders_and_qbs %>%
@@ -526,7 +540,7 @@ value_attr %>%
 
   # 6 b) Measure defensive skill via coefficient estimates in model
 skill_measures <- ranef(basic_brms_adjust)
-defender_skills <- skill_measures$defender_id_f[,,1] %>%
+defender_skills <- skill_measures$similarity_def_id_f[,,1] %>%
   data.frame() %>%
   rownames_to_column() %>%
   tibble() %>%
@@ -565,7 +579,7 @@ join_holder <- all_preds_with_defenders_and_qbs %>%
   # First column is the prediction
   mutate(pred_c_no_def = adjusted_pred_c_no_def[,1],
          pred_c_with_def = adjusted_pred_c_all[,1]) %>%
-  select(game_id, play_id, nfl_id, pred_c_no_def, pred_c_with_def)
+  select(game_id, play_id, nfl_id, pred_c_no_def, pred_c_with_def, similarity_defender_id)
 
 all_preds_with_defenders_and_epa <- first_pass_ep_unnested %>%
   filter(nfl_id == target) %>%
@@ -592,7 +606,7 @@ all_preds_with_defenders_and_epa <- first_pass_ep_unnested %>%
          !(game_id == 2018120905 & play_id == 1426),
          !(game_id == 2018121610 & play_id == 171))
 
-saveRDS(all_preds_with_defenders_and_epa, "Data/all_preds_with_defenders_and_epa.rds")
+saveRDS(all_preds_with_defenders_and_epa, "Data/all_preds_with_defenders_and_epa_similarity.rds")
 
 # Lets see some summaries
 ranked_2018_defenders <- all_preds_with_defenders_and_epa %>%

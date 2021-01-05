@@ -11,20 +11,16 @@ target <- read_csv("Data/additional_data/targetedReceiver.csv") %>%
   mutate(target = 1)
 
 # Load the required data
-all_preds_with_defenders_and_epa <- readRDS("Data/all_preds_with_defenders_and_epa.rds")
+  # Switch back to all_preds_with_defenders_and_epa for non-similarity based assignment
+all_preds_with_defenders_and_epa <- readRDS("Data/all_preds_with_defenders_and_epa_similarity.rds")
   # Switch back to first_pass_ep_yac_all_3.rds for original results
 first_pass_ep_yac_both <- readRDS("Data/yac/second_pass_ep_yac_all_3.rds")
   # Switch back to deterrence_summary (1) for original results
-deterrence_epa <- readRDS("Data/deterrence/deterrence_new_value_new_probs.rds") 
+deterrence_epa <- readRDS("Data/deterrence/deterrence_summary_update.RDS") 
 defender_assignment <- readRDS("Data/release_and_arrival.rds")
 
   # New Lucas approach to calculating nearest defender, better allocation scheme
-defender_assignment_lucas <- readRDS("Data/additional_data/def_assignment_df.rds") %>%
-  select(game_id, play_id, defender_id, assigned_rec_id) %>%
-  left_join(target, by = c("game_id", "play_id", "assigned_rec_id" = "target_nfl_id"))
-defender_assignment_lucas_targeted <- defender_assignment_lucas %>%
-  filter(target == 1) %>%
-  select(-target)
+defender_assignment_lucas <- readRDS("Data/additional_data/most_similar.rds")
 
 # Coordinate covariates, otherwise many dupes
 first_pass_reduced <- first_pass_ep_yac_both %>%
@@ -35,7 +31,7 @@ first_pass_reduced <- first_pass_ep_yac_both %>%
 # This is already a summary value, skip this one down to the WAR
 deterrence_reduced <- deterrence_epa %>%
   # Different columns if back on original file
-  select(nfl_id = closest_defensive_player, deterrence_value = total_det_value)
+  select(nfl_id, deterrence_value = total_det_value)
 
 # Separate into a completions + interceptions data set and an incompletions data set
 complete_intercept <- all_preds_with_defenders_and_epa %>%
@@ -67,7 +63,10 @@ complete_intercept_value <- complete_intercept %>%
          # Used to all be within if_else(int) for yac, now splitting
          # Unsure if I should use yac_epa_est for int_value with pred_c or no_yac_epa with 1 - pred_c
          yac_value_over_est = pred_c_no_def * (pass_result != "IN") * (observed_yac_epa_est - yac_epa_est),
-         int_value_over_est = pred_c_no_def * (pass_result == "IN") * (observed_yac_epa_est_int - yac_epa_est),
+          # Actually lets replace yac_epa_est with incomplete_epa, stating the assumption that if
+          # the ball was not intercepted it would have been at least deflected and incomplete
+          # Also use probability of incomplete instead, changing baseline
+         int_value_over_est = (1 - pred_c_no_def) * (pass_result == "IN") * (observed_yac_epa_est_int - incomplete_epa),
          complete_value_over_est = no_yac_epa_est - total_complete_epa,
          play_value_over_est_2 = yac_value_over_est + complete_value_over_est + int_value_over_est,
          play_value_over_est_no_int = yac_value_over_est + complete_value_over_est)
@@ -84,13 +83,15 @@ incomplete_value <- incomplete %>%
 
 # Now combine the necessary elements in one standardized summary
   # Adding in the 0 columns to allow row binding while also indicating what is not used
+  # Changed defender_id to similarity_defender_id but kept the naming scheme
 complete_intercept_value_reduced <- complete_intercept_value %>%
   select(game_id, play_id, pass_result, defender_id, defender_name,
          pred_c_no_def, complete_epa, incomplete_epa = 0, just_the_yac_epa, observed_epa,
          play_value_est,
          play_value_over_est, complete_value_over_est, yac_value_over_est, int_value_over_est,
          play_value_over_est_2,
-         play_value_over_est_no_int)
+         play_value_over_est_no_int,
+         similarity_defender_id)
 
 incomplete_value_reduced <- incomplete_value %>%
   select(game_id, play_id, pass_result, defender_id, defender_name,
@@ -98,15 +99,19 @@ incomplete_value_reduced <- incomplete_value %>%
          play_value_est, play_value_over_est, complete_value_over_est = 0,
          yac_value_over_est = 0, int_value_over_est = 0,
          play_value_over_est_2,
-         play_value_over_est_no_int)
+         play_value_over_est_no_int,
+         similarity_defender_id)
 
 all_value_reduced <- complete_intercept_value_reduced %>%
   bind_rows(incomplete_value_reduced)
 
 # Add in the defender IDs for release and arrival
+  # Since this is with similarity ranking, defender is the same at release and arrival
 all_value_reduced <- all_value_reduced %>%
   left_join(defender_assignment,
-            by = c("game_id", "play_id"))
+            by = c("game_id", "play_id")) %>%
+  mutate(release = similarity_defender_id,
+         arrival = similarity_defender_id)
 
 # Additionally, add in the defensive team a player is on
 plays_map <- read_csv("Data/plays.csv", col_types = cols()) %>%
@@ -128,10 +133,15 @@ all_value_reduced <- all_value_reduced %>%
   # Adding in deterrence here
   # Now I need to switch the ID info 
   # Use closest at release for deterrence
+  # NOTE: If release and arrival have been set to similarity measures, nearest_defender_id
+    # is actually the assigned similarity defender. Both are identical
 all_values_long <- all_value_reduced %>%
   pivot_longer(cols = c(release, arrival),
                names_to = "frame_time",
-               values_to = "nearest_defender_id")
+               values_to = "nearest_defender_id") %>%
+  mutate(nearest_defender_id = ifelse(is.na(nearest_defender_id),
+                                      defender_id,
+                                      nearest_defender_id))
 
 # Separate by type of frame
 release_summary <- all_values_long %>%

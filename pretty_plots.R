@@ -59,3 +59,74 @@ phase_1 <- phase_0 %>%
   theme(legend.position = "none")
 
 phase_1
+
+
+# Next plot: Ordered total value of defensive contribution
+new_setup <- war_options %>%
+  filter(!is.na(def_team)) %>%
+  group_by(def_team) %>%
+  summarize(tot_deterrence_war = sum(total_war_per_tenth_det, na.rm = TRUE),
+            tot_complete_war = sum(total_war_per_tenth_complete, na.rm = TRUE),
+            tot_int_war = sum(total_war_per_tenth_int, na.rm = TRUE),
+            tot_yac_war = sum(total_war_per_tenth_yac, na.rm = TRUE),
+            .groups = "keep") %>%
+  pivot_longer(cols = contains("war"),
+               names_to = "metric",
+               values_to = "value") %>%
+  summarize(tot_war = sum(value)) %>%
+  arrange(desc(tot_war)) %>%
+  left_join(nfl_teamcolors, by = c("def_team" = "name_abbv")) 
+
+library(ggimage)
+
+p1 <- new_setup %>%
+  mutate(def_team = fct_reorder(def_team, tot_war, .desc = TRUE)) %>%
+  ggplot(aes(x = def_team, y = tot_war, color = name, fill = name)) +
+  geom_col(width = 0.5, position = "dodge", alpha = 0.65) +
+  geom_image(data = new_setup,
+             inherit.aes = FALSE,
+             aes(x = def_team, y = tot_war, image = logo), size = 0.03, asp = 16/9, nudge_y = 0.25) +
+  scale_fill_manual(values = team_vec(which = 1)) +
+  scale_color_manual(values = team_vec(which = 2)) +
+  ggtitle("Comparison of WAR Generation Across Teams") +
+  xlab("Team") +
+  ylab("Total WAR") +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90))
+
+p1
+
+
+team_target_control <- war_options %>%
+  filter(!is.na(def_team)) %>%
+  group_by(def_team) %>%
+  summarize(tot_reps = sum(n_target),
+            tot_deterrence_war = sum(total_war_per_tenth_det, na.rm = TRUE),
+            tot_complete_war = sum(total_war_per_tenth_complete, na.rm = TRUE),
+            tot_int_war = sum(total_war_per_tenth_int, na.rm = TRUE),
+            tot_yac_war = sum(total_war_per_tenth_yac, na.rm = TRUE),
+            .groups = "keep") %>%
+  pivot_longer(cols = contains("war"),
+               names_to = "metric",
+               values_to = "value") %>%
+  summarize(tot_war = sum(value) / first(tot_reps) * 550) %>%
+  left_join(nfl_teamcolors, by = c("def_team" = "name_abbv")) 
+
+p2 <- team_target_control %>%
+  mutate(def_team = fct_reorder(def_team, tot_war, .desc = TRUE)) %>%
+  ggplot(aes(x = def_team, y = tot_war, color = name, fill = name)) +
+  geom_col(width = 0.5, position = "dodge", alpha = 0.65) +
+  geom_image(data = team_target_control,
+             inherit.aes = FALSE,
+             aes(x = def_team, y = tot_war, image = logo), size = 0.03, asp = 16/9, nudge_y = 0.25) +
+  scale_fill_manual(values = team_vec(which = 1)) +
+  scale_color_manual(values = team_vec(which = 2)) +
+  ggtitle("Comparison of WAR Generation Across Teams Controlled for Pass Attempts") +
+  xlab("Team") +
+  ylab("Total WAR per 550 Targets") +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90))
+
+p2
