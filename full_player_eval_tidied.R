@@ -145,7 +145,7 @@ new_lower_level_summary <- all_value_reduced %>%
             tot_inc_value = sum(incomplete_value_over_est, na.rm =TRUE),
             tot_int_value = sum(int_value_over_est, na.rm = TRUE),
             tot_yac_value = sum(yac_value_over_est, na.rm = TRUE)) %>%
-  mutate(contesting = tot_comp_value + tot_inc_value,
+  mutate(contesting = tot_comp_value + tot_inc_value + tot_int_value,
          total_epa = tot_comp_value + tot_inc_value + tot_int_value + tot_yac_value) %>%
   left_join(players %>% select(similarity_defender_id = nfl_id, display_name)) %>%
   arrange(total_epa)
@@ -206,9 +206,9 @@ revised_setup %>%
     total_yac_value_grade = "Pursuit Grade",
     total_det_value_grade = "Deterrence Grade",
     #total_play_value_over_est_2 = "Combined Contribution Over Est",
-    total_deterrence_value_over_est = "Deterrence Contribution",
+    total_deterrence_value_over_est = "Deterring Contribution",
     contesting = "Contesting Contribution",
-    tot_yac_value = "Pursuit Contribution",
+    tot_yac_value = "Pursuing Contribution",
     total_epa_with_det = "Total Contribution"
   ) %>%
   # WAR is in the right direction, value isnt
