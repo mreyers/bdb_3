@@ -134,4 +134,4 @@ det_df <- deterence_value2 %>%
   left_join(players_df) 
 
 
-saveRDS(det_df,"deterrence_summary_update.RDS")
+saveRDS(det_df,"deterrence_summary_update_v2.RDS")
