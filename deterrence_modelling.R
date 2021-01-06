@@ -31,7 +31,7 @@ players_name <- read_csv("data/players.csv") %>% mutate(nflId=as.character(nflId
 
 create_factor <- function(col) {
   cnt <- table(col)
-  mid_value = quantile(cnt)[3]
+  mid_value = quantile(cnt)[2]
   keep_ids <- names(cnt[cnt > mid_value])
   return(keep_ids)
 }
@@ -77,7 +77,7 @@ target_model_cp <-
     cores = 4
   )
 
- saveRDS(target_model_cp,"cp_det_model_lucas.RDS")
+saveRDS(target_model_cp,"cp_det_model_lucas.RDS")
 
 ran_eff_df <- ranef(target_model_cp)
 
@@ -96,7 +96,7 @@ def <-
 ## used to calculate average defender xcp
 
 exp_cp_player_model <- brm(
-  logit_cp ~ + 
+  logit_cp ~ 
     (1 | closest_defensive_player_f) +
     (1 | closest_offensive_player_f),
   data = final_train_df2,

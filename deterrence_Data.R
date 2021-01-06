@@ -95,7 +95,7 @@ saveRDS(t, "data/final_deterrence_unnested_receiver_pov.RDS")
 
 create_factor <- function(col) {
   cnt <- table(col)
-  mid_value = quantile(cnt)[3]
+  mid_value = quantile(cnt)[2]
   keep_ids <- names(cnt[cnt > mid_value])
   return(keep_ids)
 }
