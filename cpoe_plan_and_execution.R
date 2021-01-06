@@ -344,7 +344,11 @@ saveRDS(all_preds, "Data/cp_predictions/all_predictions.rds")
 
 # Generate nearest defender at pass arrival
 
-all_preds <- readRDS("Data/cp_predictions/all_predictions.rds")
+all_preds <- readRDS("Data/cp_predictions/all_predictions.rds") %>%
+  # Ensure there are no duplicates
+  group_by(game_id, play_id, frame_id, nfl_id) %>%
+  slice(1) %>%
+  ungroup()
 
 play_pass_start <- c("pass_forward", "pass_shovel")
 play_pass_arrive <- c("pass_outcome_caught",
@@ -463,14 +467,16 @@ all_preds_with_defenders_and_qbs <- all_preds_with_defenders %>%
                                          similarity_defender_id)) %>%
   group_by(similarity_defender_id) %>%
   mutate(n_targets = n(),
-         modified_def_id = if_else(n_targets < 30, 99999, similarity_defender_id),
-         similarity_defender_id = modified_def_id) %>%
+         # Rebrand to similarity to incorporate new work
+         #modified_def_id = if_else(n_targets < 30, 99999 ,defender_idd),
+         modified_similarity_defender_id = if_else(n_targets < 30, 99999, similarity_defender_id)) %>%
   ungroup() %>%
   mutate(pass_result_bin = if_else(pass_result %in% "C", 1, 0),
          qb_id_f = factor(qb_id),
          target_id_f = factor(nfl_id),
-         defender_id_f = factor(modified_def_id),
-         similarity_def_id_f = factor(similarity_defender_id),
+         # Again part of update
+         #defender_id_f = factor(modified_def_id),
+         similarity_def_id_f = factor(modified_similarity_defender_id),
          logit_pred_c = case_when(.pred_C < 0.01 ~ log(0.01 / 0.99),
                                   .pred_C > 0.99 ~ log(0.99 / 0.01),
                                   TRUE ~ log(.pred_C / (1 - .pred_C))))
@@ -483,8 +489,8 @@ basic_brms_adjust <- brm(pass_result_bin ~ logit_pred_c +
                                data = all_preds_with_defenders_and_qbs,
                                family = bernoulli(),
                                chains = 2,
-                               warmup = 1000,
-                               iter = 1500,
+                               warmup = 1500,
+                               iter = 2500,
                          cores = 2,
                          silent = FALSE)
 tictoc::toc()

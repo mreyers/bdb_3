@@ -16,7 +16,7 @@ all_preds_with_defenders_and_epa <- readRDS("Data/all_preds_with_defenders_and_e
   # Switch back to first_pass_ep_yac_all_3.rds for original results
 first_pass_ep_yac_both <- readRDS("Data/yac/second_pass_ep_yac_all_3.rds")
   # Switch back to deterrence_summary (1) for original results
-deterrence_epa <- readRDS("Data/deterrence/deterrence_summary_update.RDS") 
+deterrence_epa <- readRDS("Data/deterrence/deterrence_summary_update_v2.RDS") 
 defender_assignment <- readRDS("Data/release_and_arrival.rds")
 
   # New Lucas approach to calculating nearest defender, better allocation scheme
@@ -62,12 +62,12 @@ complete_intercept_value <- complete_intercept %>%
          total_complete_epa = pred_c_no_def * complete_epa,
          # Used to all be within if_else(int) for yac, now splitting
          # Unsure if I should use yac_epa_est for int_value with pred_c or no_yac_epa with 1 - pred_c
-         yac_value_over_est = pred_c_no_def * (pass_result != "IN") * (observed_yac_epa_est - yac_epa_est),
+         yac_value_over_est = (pass_result != "IN") * (observed_yac_epa_est - pred_c_no_def * yac_epa_est),
           # Actually lets replace yac_epa_est with incomplete_epa, stating the assumption that if
           # the ball was not intercepted it would have been at least deflected and incomplete
           # Also use probability of incomplete instead, changing baseline
-         int_value_over_est = (1 - pred_c_no_def) * (pass_result == "IN") * (observed_yac_epa_est_int - incomplete_epa),
-         complete_value_over_est = no_yac_epa_est - total_complete_epa,
+         int_value_over_est = (pass_result == "IN") * (observed_yac_epa_est_int - (1 - pred_c_no_def) * incomplete_epa),
+         complete_value_over_est = (pass_result == "C") * (no_yac_epa_est -  total_complete_epa),
          play_value_over_est_2 = yac_value_over_est + complete_value_over_est + int_value_over_est,
          play_value_over_est_no_int = yac_value_over_est + complete_value_over_est)
 
@@ -76,10 +76,9 @@ complete_intercept_value <- complete_intercept %>%
   # On incompletions though the value is 0 unless probability is included and should be
   # higher as the probability of pass completion rises
 incomplete_value <- incomplete %>%
-  mutate(play_value_est = (1 - pred_c_no_def) * incomplete_epa,
-         play_value_over_est = observed_epa - play_value_est,
-         play_value_over_est_2 = play_value_over_est,
-         play_value_over_est_no_int = play_value_over_est)
+  mutate(incomplete_value_over_est = (1 - pred_c_no_def) * incomplete_epa - hypothetical_epa,
+         play_value_over_est_2 = incomplete_value_over_est,
+         play_value_over_est_no_int = play_value_over_est_2)
 
 # Now combine the necessary elements in one standardized summary
   # Adding in the 0 columns to allow row binding while also indicating what is not used
@@ -87,8 +86,10 @@ incomplete_value <- incomplete %>%
 complete_intercept_value_reduced <- complete_intercept_value %>%
   select(game_id, play_id, pass_result, defender_id, defender_name,
          pred_c_no_def, complete_epa, incomplete_epa = 0, just_the_yac_epa, observed_epa,
-         play_value_est,
-         play_value_over_est, complete_value_over_est, yac_value_over_est, int_value_over_est,
+         #play_value_est,
+         #play_value_over_est,
+         complete_value_over_est, yac_value_over_est, int_value_over_est,
+         incomplete_value_over_est = 0,
          play_value_over_est_2,
          play_value_over_est_no_int,
          similarity_defender_id)
@@ -96,8 +97,11 @@ complete_intercept_value_reduced <- complete_intercept_value %>%
 incomplete_value_reduced <- incomplete_value %>%
   select(game_id, play_id, pass_result, defender_id, defender_name,
          pred_c_no_def, complete_epa = 0, incomplete_epa, just_the_yac_epa = 0, observed_epa,
-         play_value_est, play_value_over_est, complete_value_over_est = 0,
+         #play_value_est,
+         #play_value_over_est,
+         complete_value_over_est = 0,
          yac_value_over_est = 0, int_value_over_est = 0,
+         incomplete_value_over_est,
          play_value_over_est_2,
          play_value_over_est_no_int,
          similarity_defender_id)
@@ -128,6 +132,25 @@ plays_map <- read_csv("Data/plays.csv", col_types = cols()) %>%
 
 all_value_reduced <- all_value_reduced %>%
   left_join(plays_map, by = c("game_id", "play_id"))
+
+new_lower_level_summary <- all_value_reduced %>%
+  group_by(similarity_defender_id) %>%
+  summarize(tot_comp_value = sum(complete_value_over_est, na.rm = TRUE),
+            tot_inc_value = sum(incomplete_value_over_est, na.rm =TRUE),
+            tot_int_value = sum(int_value_over_est, na.rm = TRUE),
+            tot_yac_value = sum(yac_value_over_est, na.rm = TRUE)) %>%
+  mutate(contesting = tot_comp_value + tot_inc_value,
+         total_epa = tot_comp_value + tot_inc_value + tot_int_value + tot_yac_value) %>%
+  left_join(players %>% select(similarity_defender_id = nfl_id, display_name)) %>%
+  arrange(total_epa)
+
+# Add in deterrence here
+new_lower_level_with_det <- new_lower_level_summary %>%
+  left_join(deterrence_reduced %>%
+              mutate(defender_id = as.numeric(as.character((nfl_id)))) %>%
+              select(defender_id, total_deterrence_value_over_est = deterrence_value),
+            by = c("similarity_defender_id" = "defender_id")) %>%
+  mutate(total_epa_with_det = total_epa + total_deterrence_value_over_est)
 
 # Now summarize with respect to these outcomes
   # Adding in deterrence here
@@ -179,8 +202,7 @@ release_value_summarized <- release_summary %>%
   # Arrival value should be all other facets
 arrival_value_summarized <- arrival_summary %>%
   group_by(nearest_defender_id) %>%
-  summarize(defender_name = first(defender_name),
-            n_target = n(),
+  summarize(n_target = n(),
             completion_percentage_allowed = sum(as.numeric(pass_result == "C")) / n_target,
             expected_completion_percentage_allowed = mean(pred_c_no_def),
             cpoe = completion_percentage_allowed - expected_completion_percentage_allowed,
@@ -193,7 +215,9 @@ arrival_value_summarized <- arrival_summary %>%
             total_play_value_over_est_no_int = sum(play_value_over_est_no_int, na.rm = TRUE),
             # Do as subtraction instead of sum(complete_val_over_est) due to incomplete passes
             total_complete_value_over_est = 
-              total_play_value_over_est_2 - total_yac_value_over_est - total_int_value_over_est)
+              total_play_value_over_est_2 - total_yac_value_over_est - total_int_value_over_est) %>%
+  left_join(players %>% select(nearest_defender_id = nfl_id, defender_name = display_name),
+            by = "nearest_defender_id")
   
 all_values_summarized <- arrival_value_summarized %>%
   left_join(release_value_summarized, by = "nearest_defender_id") %>%
@@ -273,8 +297,10 @@ war_benchmarks <- all_values_summarized %>%
             tenth_percentile_over_est_deterrence = quantile(total_deterrence_value_over_est, 0.9, na.rm = TRUE),
             # int
             avg_value_over_est_int = mean(total_int_value_over_est),
-            tenth_percentile_over_est_int = quantile(total_int_value_over_est, 0.9)
-            )
+            tenth_percentile_over_est_int = quantile(total_int_value_over_est, 0.9),
+            # complete and int together
+            avg_value_over_est_complete_int = mean(total_complete_value_over_est + total_int_value_over_est),
+            tenth_percentile_over_est_complete_int = quantile(total_complete_value_over_est + total_int_value_over_est, 0.9))
 
 # Now a WAR plot
   # Change to use the no_int option, used to be est_2
@@ -293,7 +319,8 @@ war_options <- all_values_summarized %>%
          total_war_per_tenth_complete = -1 * (total_complete_value_over_est - war_benchmarks$tenth_percentile_over_est_complete) / 38.4,
          total_war_per_tenth_yac = -1 * (total_yac_value_over_est - war_benchmarks$tenth_percentile_over_est_yac) / 38.4,
          total_war_per_tenth_det = -1 * (total_deterrence_value_over_est - war_benchmarks$tenth_percentile_over_est_deterrence) / 38.4,
-         total_war_per_tenth_int = -1 * (total_int_value_over_est - war_benchmarks$tenth_percentile_over_est_int) / 38.4)
+         total_war_per_tenth_int = -1 * (total_int_value_over_est - war_benchmarks$tenth_percentile_over_est_int) / 38.4,
+         total_war_per_tenth_comp_int = -1 * (total_complete_value_over_est + total_int_value_over_est - war_benchmarks$tenth_percentile_over_est_complete_int) / 38.4)
 
 saveRDS(war_options, "Data/war_options.rds")
 
@@ -332,6 +359,14 @@ det_z <- (det_value - mean(det_value)) / sd(det_value)
 det_p <- pnorm(det_z, lower.tail = FALSE)
 det_grades <- (det_p - min(det_p)) / (max(det_p) - min(det_p))
 
+complete_and_int_value <- war_options$total_complete_value_over_est + 
+  war_options$total_int_value_over_est
+complete_and_int_z <- (complete_and_int_value - mean(complete_and_int_value)) / sd(complete_and_int_value)
+complete_and_int_p <- pnorm(complete_and_int_z, lower.tail = FALSE)
+complete_and_int_grades <- (complete_and_int_p - min(complete_and_int_p)) /
+  (max(complete_and_int_p) - min(complete_and_int_p))
+
+
 
 z_score_setup <- war_options %>%
   select(nearest_defender_id, defender_name,
@@ -340,9 +375,11 @@ z_score_setup <- war_options %>%
          total_int_value_over_est, total_deterrence_value_over_est,
          total_play_value_over_est_2,
          total_war_per_tenth,
-         total_war_per_tenth_complete, total_war_per_tenth_yac,
+         # Changed this guy
+         total_war_per_tenth_complete = total_war_per_tenth_comp_int,
+         total_war_per_tenth_yac,
          total_war_per_tenth_det, total_war_per_tenth_int) %>%
-  mutate(total_complete_value_grade = complete_grades,
+  mutate(total_complete_value_grade = complete_and_int_grades, # complete_grades,
          total_yac_value_grade = yac_grades,
          total_int_value_grade = int_grades,
          total_det_value_grade = det_grades,
