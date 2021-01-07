@@ -15,6 +15,11 @@ soft_max_norm <- function(prob_vector){
   return(norm_values)
 }
 
+max_norm <- function(prob_vector){
+  norm_values <- prob_vector/sum(prob_vector)
+  return(norm_values)
+}
+
 frame_df <- readRDS("final_train_deterrence.RDS")
 frame_df2 <- frame_df %>% select(play_id,game_id,frame_id) %>% distinct()
 
@@ -33,6 +38,8 @@ combine_epa_df <- final_train_df %>% left_join(frame_df2) %>% inner_join(hyp_epa
   mutate(
     logit_cp = logit_scaled(cp)
   )
+
+rm(hyp_epa)
 
 ## 
 unique_offensive_players <- final_train_df %>% 
@@ -72,7 +79,17 @@ combine_df <- bind_cols(combine_epa_df,target_preds) %>%
     norm_no_re_estimate = soft_max_norm(Estimate_no_re),
     re_diff = norm_re_estimate - norm_no_re_estimate)
 
-saveRDS(combine_df,"combine_df.rds")
+saveRDS(combine_df,"combine_df_lucas.rds")
+
+# combine_df <- readRDS("combine_df_lucas.rds")
+
+# do regular prob norm as well
+combine_df <- combine_df %>%
+  group_by(play_id,game_id) %>%
+  mutate(
+    reg_norm_re_estimate = max_norm(Estimate_re),
+    reg_norm_no_re_estimate = max_norm(Estimate_no_re)
+  )
 
   
 deterence_value <- combine_df %>% group_by(game_id,play_id) %>%
@@ -115,12 +132,13 @@ deterence_value2 <- combine_df %>% group_by(game_id, play_id) %>%
     defended_hyp_epa = if_else(hyp_epa > observed_hyp_epa,
                                hyp_epa,
                                observed_hyp_epa),
-    first_term = (observed_hyp_epa - defended_hyp_epa) * (1 - target) * (norm_no_re_estimate),
-    second_term = (max_hyp_epa - observed_hyp_epa) * target * (1 - norm_no_re_estimate),
+    first_term = (observed_hyp_epa - defended_hyp_epa) * (1 - target) * (reg_norm_no_re_estimate),#(norm_no_re_estimate),
+    second_term = (max_hyp_epa - observed_hyp_epa) * target * (1 - reg_norm_no_re_estimate),
     deterrence_estimate = first_term + second_term
   ) %>%
   group_by(defender_id) %>%
-  summarize(total_det_value = sum(deterrence_estimate)) %>%
+  summarize(total_det_value = sum(deterrence_estimate),
+            snap_cnt = n()) %>%
   arrange(total_det_value) 
 
 
@@ -134,4 +152,76 @@ det_df <- deterence_value2 %>%
   left_join(players_df) 
 
 
-saveRDS(det_df,"deterrence_summary_update_v2.RDS")
+saveRDS(det_df,"deterrence_summary_update_v4.RDS")
+
+
+
+### try plotting usage 
+plot_df <- det_df %>% filter(snap_cnt>100)
+
+avg_usage <- mean(plot_df$snap_cnt)
+avg_epa <- mean(plot_df$total_det_value)
+
+quad_players = plot_df %>% filter(abs(total_det_value)>5) %>% 
+  mutate(det_sign = sign(total_det_value), 
+         snap_sign = sign(snap_cnt-avg_usage)) %>%
+  group_by(det_sign,snap_sign) %>%
+  arrange(abs(total_det_value),.by_group=T) %>%
+  slice_max(abs(total_det_value),n=3)
+
+library(ggrepel)
+
+# good_so <- paste("",sprintf('\u2192'))    
+# good_in_outs <- paste( sprintf('\u2191'),"In-Play Outs")
+
+ggplot() + 
+  geom_point(data=plot_df, aes(x=snap_cnt,y=total_det_value,
+                               color = position,
+                               alpha=snap_cnt)) + 
+  geom_vline(xintercept = avg_usage,linetype="dotted") + 
+  geom_hline(yintercept = avg_epa,linetype="dotted") + 
+  scale_y_reverse() + 
+  theme_bw(base_size=16) + 
+  labs(
+    x = "Usage (Snap Count)",
+    y = "Total Deterrence Value (EPA)"
+  )  + 
+  geom_text_repel(data=quad_players,aes(x=snap_cnt,y=total_det_value,label=display_name)) + 
+  theme(legend.position = "none") + 
+   annotate(
+     "text",
+     x = 380,
+     y = -15,
+     label = "Best Defender on the team",
+     color = 'firebrick3',
+     size = 5
+   ) + 
+  annotate(
+    "text",
+    x = 110,
+    y = -15,
+    label = "Put me in coach!",
+    color = 'firebrick3',
+    size = 5
+  ) +
+  annotate(
+    "text",
+    x = 380,
+    y = 5,
+    label = "No other choice",
+    color = 'blue',
+    size = 5
+  ) +
+  annotate(
+    "text",
+    x = 110,
+    y = 5,
+    label = "Welp",
+    color = 'blue',
+    size = 5
+  ) 
+
+
+
+
+

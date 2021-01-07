@@ -91,6 +91,26 @@ def <-
   tibble::rownames_to_column(var ="nflId") %>%
   left_join(players_name)
 
+## Calibration plot 
+## Method 1 
+final_test_df <- final_train_df %>% filter(!is.na(logit_cp))
+pred_values <- predict(target_model_cp,newdata = final_test_df)
+
+pred_df <-pred_values %>% as.data.frame()
+
+final_df <- bind_cols(final_test_df,pred_df) %>%
+  mutate(target_num = as.numeric(target)) %>%
+  group_by(play_id,game_id) %>%
+  mutate(
+    soft_max_prob = soft_max_norm(Estimate),
+    prob_norm = max_norm(Estimate)
+  )
+
+ggplot(final_df, aes(x= prob_norm, y = target_num)) + 
+  geom_point() + 
+  geom_smooth() + theme_bw(base_size=16)
+
+
 
 ## cp model by player REs
 ## used to calculate average defender xcp
