@@ -21,8 +21,10 @@ all_preds_with_defenders_and_epa <- readRDS("Data/all_preds_with_defenders_and_e
 # Switch back to first_pass_ep_yac_all_3.rds for original results
 first_pass_ep_yac_both <- readRDS("Data/yac/second_pass_ep_yac_all_3.rds")
 # Switch back to deterrence_summary (1) for original results
-deterrence_epa <- readRDS("Data/deterrence/deterrence_summary_update_v2.RDS") 
+deterrence_epa <- readRDS("Data/deterrence/deterrence_summary_update_v4.RDS") 
 defender_assignment <- readRDS("Data/release_and_arrival.rds")
+# Lucas update with pass_coverage
+pre_release_coverage <- readRDS("Data/pre_release_coverage/v2_target_coverage_pre_pass_release.rds")
 
 # New Lucas approach to calculating nearest defender, better allocation scheme
 defender_assignment_lucas <- readRDS("Data/additional_data/most_similar.rds")
@@ -67,7 +69,7 @@ complete_intercept_value <- complete_intercept %>%
          total_complete_epa = pred_c_no_def * complete_epa,
          # Used to all be within if_else(int) for yac, now splitting
          # Unsure if I should use yac_epa_est for int_value with pred_c or no_yac_epa with 1 - pred_c
-         yac_value_over_est = (pass_result != "IN") * (observed_yac_epa_est - pred_c_no_def * yac_epa_est),
+         yac_value_over_est = (pass_result == "C") * (observed_yac_epa_est - pred_c_no_def * yac_epa_est),
          # Actually lets replace yac_epa_est with incomplete_epa, stating the assumption that if
          # the ball was not intercepted it would have been at least deflected and incomplete
          # Also use probability of incomplete instead, changing baseline
@@ -114,6 +116,20 @@ incomplete_value_reduced <- incomplete_value %>%
 all_value_reduced <- complete_intercept_value_reduced %>%
   bind_rows(incomplete_value_reduced)
 
+# all_value_reduced %>%
+#   group_by(similarity_defender_id) %>%
+#   summarize(complete_value_over_est = sum(complete_value_over_est, na.rm = TRUE),
+#             incomplete_value_over_est = sum(incomplete_value_over_est, na.rm = TRUE),
+#             int_value_over_est = sum(int_value_over_est, na.rm = TRUE)) %>%
+#   summarize(avg_comp_value = mean(complete_value_over_est, na.rm = TRUE),
+#             sd_comp_value = sd(complete_value_over_est, na.rm = TRUE),
+#             avg_inc_value = mean(incomplete_value_over_est, na.rm = TRUE),
+#             sd_inc_value = sd(incomplete_value_over_est, na.rm = TRUE),
+#             avg_int_value = mean(int_value_over_est, na.rm = TRUE),
+#             sd_int_value = sd(int_value_over_est, na.rm = TRUE)
+#   ) %>%
+#   View()
+
 # Add in the defender IDs for release and arrival
 # Since this is with similarity ranking, defender is the same at release and arrival
 all_value_reduced <- all_value_reduced %>%
@@ -138,9 +154,12 @@ plays_map <- read_csv("Data/plays.csv", col_types = cols()) %>%
 all_value_reduced <- all_value_reduced %>%
   left_join(plays_map, by = c("game_id", "play_id"))
 
+
 new_lower_level_summary <- all_value_reduced %>%
   group_by(similarity_defender_id) %>%
-  summarize(cpoe = mean(pass_result %in% "C") - mean(pred_c_no_def),
+  summarize(n_targets = n(),
+            def_team = first(def_team),
+            cpoe = mean(pass_result %in% "C") - mean(pred_c_no_def),
             tot_comp_value = sum(complete_value_over_est, na.rm = TRUE),
             tot_inc_value = sum(incomplete_value_over_est, na.rm =TRUE),
             tot_int_value = sum(int_value_over_est, na.rm = TRUE),
@@ -156,7 +175,11 @@ new_lower_level_with_det <- new_lower_level_summary %>%
               mutate(defender_id = as.numeric(as.character((nfl_id)))) %>%
               select(defender_id, total_deterrence_value_over_est = deterrence_value),
             by = c("similarity_defender_id" = "defender_id")) %>%
-  mutate(total_epa_with_det = total_epa + total_deterrence_value_over_est)
+  left_join(pre_release_coverage %>%
+              select(pre_release = total_value_3, similarity_defender_id = def_id) %>%
+              mutate(similarity_defender_id = as.numeric(similarity_defender_id)),
+            by = c("similarity_defender_id")) %>%
+  mutate(total_epa_with_det_and_pre = total_epa + total_deterrence_value_over_est + pre_release)
 
 # Okay these values look nice
 # Now convert each to WAR and finalize an initial table
@@ -175,28 +198,32 @@ grades_fn <- function(column){
 contesting_grades <- grades_fn(new_lower_level_with_det$contesting)
 yac_grades <- grades_fn(new_lower_level_with_det$tot_yac_value)
 det_grades <- grades_fn(new_lower_level_with_det$total_deterrence_value_over_est)
+pre_release_grades <- grades_fn(new_lower_level_with_det$pre_release)
 
 revised_setup <- new_lower_level_with_det %>%
-  select(similarity_defender_id, display_name,
+  select(n_targets, def_team, similarity_defender_id, display_name,
          cpoe,
          total_deterrence_value_over_est,
          contesting,
          tot_yac_value,
-         total_epa_with_det) %>%
+         pre_release,
+         total_epa_with_det_and_pre) %>%
   mutate(#war_det = -1 * total_deterrence_value_over_est / 38.4,
          #war_contest = -1 * contesting / 38.4,
          #war_yac = -1 * tot_yac_value / 38.4,
          #war_total = -1 * total_epa_with_det / 38.4,
          total_contesting_grade = contesting_grades, # complete_grades,
          total_yac_value_grade = yac_grades,
-         total_det_value_grade = det_grades)
+         total_det_value_grade = det_grades,
+         total_pre_release_grade = pre_release_grades)
+
+saveRDS(revised_setup, "Data/output/revised_setup.rds")
 
 
-
-
-revised_setup %>%
-  select(-similarity_defender_id) %>%
-  arrange((total_epa_with_det)) %>%
+sum_table <- revised_setup %>%
+  filter(n_targets >= 30) %>%
+  select(-similarity_defender_id, -n_targets, -def_team) %>%
+  arrange((total_epa_with_det_and_pre)) %>%
   slice(1:20) %>%
   gt() %>%
   cols_label(
@@ -205,17 +232,19 @@ revised_setup %>%
     total_contesting_grade = "Pass Contesting Grade",
     total_yac_value_grade = "Pursuit Grade",
     total_det_value_grade = "Deterrence Grade",
+    total_pre_release_grade = "Pre-Pass Release Grade",
     #total_play_value_over_est_2 = "Combined Contribution Over Est",
     total_deterrence_value_over_est = "Deterring Contribution",
     contesting = "Contesting Contribution",
     tot_yac_value = "Pursuing Contribution",
-    total_epa_with_det = "Total Contribution"
+    total_epa_with_det_and_pre = "Total Contribution",
+    pre_release = "Pre-Pass Release Contribution"
   ) %>%
   # WAR is in the right direction, value isnt
   # Now that it is grades, remove the rev()
   data_color(
     columns = vars(total_contesting_grade, total_yac_value_grade,
-                   total_det_value_grade),
+                   total_det_value_grade, total_pre_release_grade),
     #total_play_value_over_est_2),
     colors = scales::col_numeric(
       palette = c("#ffffff", "#f2fbd2", "#c9ecb4", "#93d3ab", "#35b0ab"),
@@ -226,7 +255,8 @@ revised_setup %>%
     columns = vars(total_deterrence_value_over_est,
                    contesting,
                    tot_yac_value,
-                   total_epa_with_det),
+                   total_epa_with_det_and_pre,
+                   pre_release),
     colors = scales::col_numeric(
       palette = rev(c("#ffffff", "#f2fbd2", "#c9ecb4", "#93d3ab", "#35b0ab")),
       domain = NULL
@@ -240,12 +270,13 @@ revised_setup %>%
     columns = vars(total_deterrence_value_over_est,
                    contesting,
                    tot_yac_value,
-                   total_epa_with_det),
+                   total_epa_with_det_and_pre,
+                   pre_release),
     decimals = 2
   ) %>%
   fmt_number(
     columns = vars(total_contesting_grade, total_yac_value_grade,
-                   total_det_value_grade),
+                   total_det_value_grade, total_pre_release_grade),
     decimals = 0,
     scale_by = 100
   ) %>% 
@@ -262,6 +293,11 @@ revised_setup %>%
   cols_merge(
     columns = vars(total_deterrence_value_over_est, total_det_value_grade),
     hide_columns = vars(total_det_value_grade),
+    pattern = "{1} ({2})"
+  ) %>%
+  cols_merge(
+    columns = vars(pre_release, total_pre_release_grade),
+    hide_columns = vars(total_pre_release_grade),
     pattern = "{1} ({2})"
   ) %>%
   tab_style(
@@ -288,15 +324,17 @@ revised_setup %>%
     ),
     locations = list(
       cells_body(
-        columns = vars(total_deterrence_value_over_est,
+        columns = vars(pre_release,
+                       total_deterrence_value_over_est,
                        contesting,
                        tot_yac_value,
-                       total_epa_with_det)
+                       total_epa_with_det_and_pre)
       )
     )
   ) %>%
   cols_move(
-    columns = vars(total_deterrence_value_over_est,
+    columns = vars(pre_release,
+                   total_deterrence_value_over_est,
                    contesting,
                    tot_yac_value),
     after = vars(cpoe)
@@ -319,3 +357,5 @@ revised_setup %>%
     title = md("**Defender Metric Summaries from the 2018 NFL Season**"),
     subtitle = "Top 20 Players by EPA Above Expected"
   )
+
+gtsave(sum_table, "value_chart.png")
