@@ -69,7 +69,7 @@ complete_intercept_value <- complete_intercept %>%
          total_complete_epa = pred_c_no_def * complete_epa,
          # Used to all be within if_else(int) for yac, now splitting
          # Unsure if I should use yac_epa_est for int_value with pred_c or no_yac_epa with 1 - pred_c
-         yac_value_over_est = (pass_result == "C") * (observed_yac_epa_est - pred_c_no_def * yac_epa_est),
+         yac_value_over_est = pred_c_no_def * (pass_result == "C") * (observed_yac_epa_est - yac_epa_est),
          # Actually lets replace yac_epa_est with incomplete_epa, stating the assumption that if
          # the ball was not intercepted it would have been at least deflected and incomplete
          # Also use probability of incomplete instead, changing baseline
@@ -185,8 +185,9 @@ new_lower_level_with_det <- new_lower_level_summary %>%
 # Now convert each to WAR and finalize an initial table
 # Make it pretty tomorrow
 
-grades_fn <- function(column){
-  complete_value <- column
+grades_fn <- function(column, n_targ){
+  allowed_index <- n_targ > 30
+  complete_value <- column[allowed_index]
   complete_z <- (complete_value - mean(complete_value, na.rm=TRUE)) / sd(complete_value, na.rm=TRUE)
   complete_p <- pnorm(complete_z, lower.tail = FALSE) # lower because negative is good
   complete_grades <- (complete_p - min(complete_p, na.rm = TRUE)) /
@@ -195,12 +196,17 @@ grades_fn <- function(column){
   return(complete_grades)
 }
 
-contesting_grades <- grades_fn(new_lower_level_with_det$contesting)
-yac_grades <- grades_fn(new_lower_level_with_det$tot_yac_value)
-det_grades <- grades_fn(new_lower_level_with_det$total_deterrence_value_over_est)
-pre_release_grades <- grades_fn(new_lower_level_with_det$pre_release)
+contesting_grades <- grades_fn(new_lower_level_with_det$contesting,
+                               n_targ = new_lower_level_with_det$n_targets)
+yac_grades <- grades_fn(new_lower_level_with_det$tot_yac_value,
+                        n_targ = new_lower_level_with_det$n_targets)
+det_grades <- grades_fn(new_lower_level_with_det$total_deterrence_value_over_est,
+                        n_targ = new_lower_level_with_det$n_targets)
+pre_release_grades <- grades_fn(new_lower_level_with_det$pre_release,
+                                n_targ = new_lower_level_with_det$n_targets)
 
 revised_setup <- new_lower_level_with_det %>%
+  filter(n_targets > 30) %>%
   select(n_targets, def_team, similarity_defender_id, display_name,
          cpoe,
          total_deterrence_value_over_est,
@@ -217,7 +223,7 @@ revised_setup <- new_lower_level_with_det %>%
          total_det_value_grade = det_grades,
          total_pre_release_grade = pre_release_grades)
 
-saveRDS(revised_setup, "Data/output/revised_setup.rds")
+#saveRDS(revised_setup, "Data/output/revised_setup.rds")
 
 
 sum_table <- revised_setup %>%
@@ -358,4 +364,31 @@ sum_table <- revised_setup %>%
     subtitle = "Top 20 Players by EPA Above Expected"
   )
 
-gtsave(sum_table, "value_chart.png")
+sum_table
+
+
+#gtsave(sum_table, "value_chart.png")
+
+
+
+# # # # 
+# Stuff for presentation in finals
+table_holder <- revised_setup %>%
+  filter(n_targets >= 30) %>%
+  select(-similarity_defender_id, -n_targets, -def_team)
+
+# Deterrence
+table_holder %>%
+  arrange(total_deterrence_value_over_est)
+
+# Pre-Release Coverage
+table_holder %>%
+  arrange(pre_release)
+
+# Contest
+table_holder %>%
+  arrange(contesting)
+
+# Pursuit
+table_holder %>%
+  arrange(total_yac_value)
